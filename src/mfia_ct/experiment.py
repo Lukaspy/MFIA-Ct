@@ -6,6 +6,7 @@ to produce optical pulses. For the mock backend, synthesizes segments directly.
 
 from __future__ import annotations
 
+import copy
 import time
 from typing import Iterator, Protocol
 
@@ -50,12 +51,58 @@ class CtExperiment:
             time.sleep(self.cfg.pulse.period_s * 0.02)  # keep GUI responsive
 
     def _run_hardware(self) -> Iterator[CtSegment]:
+        if self.cfg.acq.trigger_source == TriggerSource.SOFTWARE:
+            yield from self._run_software_trigger()
+        else:
+            yield from self._run_hw_trigger()
+
+    def _run_software_trigger(self) -> Iterator[CtSegment]:
+        """One DAQ execute per pulse, count=1, forceTrigger per pulse.
+
+        Avoids the re-arm race that breaks back-to-back forceTrigger calls
+        when duration + holdoff approaches the pulse period.
+        """
+        pulse = self.cfg.pulse
+        per_pulse_cfg = copy.deepcopy(self.cfg)
+        per_pulse_cfg.pulse.n_pulses = 1
+
+        try:
+            self.backend.set_aux_out(pulse.aux_out_channel, pulse.low_v)
+            time.sleep(0.05)
+
+            for _ in range(pulse.n_pulses):
+                acq = CtAcquisition(self.backend)
+                acq.configure(per_pulse_cfg)
+                acq.start()
+                time.sleep(0.05)  # let module arm
+
+                self.backend.set_aux_out(pulse.aux_out_channel, pulse.high_v)
+                acq.force_trigger()
+                t_pulse_start = time.monotonic()
+                time.sleep(pulse.pulse_width_s)
+                self.backend.set_aux_out(pulse.aux_out_channel, pulse.low_v)
+
+                # Wait for this segment to complete.
+                deadline = time.monotonic() + self.cfg.acq.duration_s + 1.0
+                while not acq.is_finished() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+
+                for seg in acq.read():
+                    yield seg
+                acq.stop()
+
+                # Pace the pulse train.
+                elapsed = time.monotonic() - t_pulse_start
+                time.sleep(max(0.0, pulse.period_s - elapsed))
+        finally:
+            self.backend.set_aux_out(pulse.aux_out_channel, pulse.low_v)
+
+    def _run_hw_trigger(self) -> Iterator[CtSegment]:
+        """Single DAQ execute with count=n_pulses; native edge triggers."""
         pulse = self.cfg.pulse
         acq = CtAcquisition(self.backend)
         acq.configure(self.cfg)
         acq.start()
-
-        use_force = self.cfg.acq.trigger_source == TriggerSource.SOFTWARE
 
         try:
             self.backend.set_aux_out(pulse.aux_out_channel, pulse.low_v)
@@ -65,12 +112,7 @@ class CtExperiment:
             for _ in range(pulse.n_pulses):
                 if acq.is_finished():
                     break
-                # Drive light pulse. In SOFTWARE mode we force the DAQ trigger
-                # immediately after raising Aux Out so the segment is aligned
-                # to the light-on edge.
                 self.backend.set_aux_out(pulse.aux_out_channel, pulse.high_v)
-                if use_force:
-                    acq.force_trigger()
                 time.sleep(pulse.pulse_width_s)
                 self.backend.set_aux_out(pulse.aux_out_channel, pulse.low_v)
                 time.sleep(max(0.0, pulse.period_s - pulse.pulse_width_s))
@@ -80,10 +122,8 @@ class CtExperiment:
                     yield seg
                 emitted = len(segments)
 
-            # Drain anything still buffered.
             time.sleep(self.cfg.acq.duration_s)
-            segments = acq.read()
-            for seg in segments[emitted:]:
+            for seg in acq.read()[emitted:]:
                 yield seg
         finally:
             acq.stop()
