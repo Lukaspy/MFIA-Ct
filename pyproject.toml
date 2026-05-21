@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mfia-ct"
+version = "0.1.0"
+description = "Photo-C-t measurement GUI for the Zurich Instruments MFIA"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Lukas Crockett" }]
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.24",
+    "h5py>=3.9",
+    "PyQt6>=6.5",
+    "pyqtgraph>=0.13",
+]
+
+[project.optional-dependencies]
+hardware = ["zhinst>=23.06"]
+dev = ["pytest>=7", "pytest-qt>=4.4"]
+
+[project.scripts]
+mfia-ct = "mfia_ct.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
