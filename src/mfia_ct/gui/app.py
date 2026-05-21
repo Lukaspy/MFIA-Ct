@@ -1,14 +1,12 @@
-"""PyQt6 main window for the photo-C-t experiment.
+"""PyQt6 main window for continuous photo-C-t acquisition.
 
 Parameter panel on the left, live pyqtgraph plots of Cp(t) and Gp(t) on the
-right. Acquisition runs in a worker QThread that yields CtSegments back to
-the main thread via a signal, where they get accumulated and drawn.
+right with vertical markers at each pulse time. Acquisition runs in a worker
+QThread that yields StreamChunks via a signal, where they get appended to a
+growing buffer and re-drawn.
 """
 
 from __future__ import annotations
-
-from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 import pyqtgraph as pg
@@ -31,7 +29,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ..acquisition import CtSegment
+from ..acquisition import StreamChunk
 from ..config import (
     AcquisitionSettings,
     CtConfig,
@@ -39,14 +37,14 @@ from ..config import (
     EquivCircuit,
     IASettings,
     PulseSettings,
-    TriggerSource,
 )
 from ..experiment import CtExperiment
 from ..storage import save_run
 
 
 class AcquisitionWorker(QObject):
-    segment = pyqtSignal(object)  # CtSegment
+    chunk = pyqtSignal(object)  # StreamChunk
+    pulse_count = pyqtSignal(int)
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
@@ -54,19 +52,28 @@ class AcquisitionWorker(QObject):
         super().__init__()
         self.backend = backend
         self.cfg = cfg
-        self._stop = False
+        self._exp: CtExperiment | None = None
 
     def stop(self) -> None:
-        self._stop = True
+        if self._exp is not None:
+            self._exp.stop()
 
     def run(self) -> None:
         try:
-            exp = CtExperiment(self.backend, self.cfg)
-            for seg in exp.run():
-                if self._stop:
-                    break
-                self.segment.emit(seg)
-        except Exception as e:  # surface to GUI rather than killing the thread
+            self._exp = CtExperiment(self.backend, self.cfg)
+            last_pulse_count = 0
+            for ch in self._exp.run():
+                self.chunk.emit(ch)
+                n = len(self._exp.pulse_times)
+                if n != last_pulse_count:
+                    self.pulse_count.emit(n)
+                    last_pulse_count = n
+            # Emit one final count update in case the last pulse fired between
+            # the last chunk and the loop exiting.
+            n = len(self._exp.pulse_times)
+            if n != last_pulse_count:
+                self.pulse_count.emit(n)
+        except Exception as e:
             self.error.emit(f"{type(e).__name__}: {e}")
         finally:
             self.finished.emit()
@@ -122,14 +129,13 @@ class ControlPanel(QWidget):
         pulse = QGroupBox("Optical pulse")
         pulse_form = QFormLayout(pulse)
         self.aux_ch = QComboBox()
-        # Front panel labels Aux Outputs 1-4; the API uses indices 0-3.
         for i in range(4):
             self.aux_ch.addItem(f"Aux Out {i + 1}", userData=i)
         self.high_v = _spin(5.0, 0.0, 10.0, 0.1, decimals=2)
         self.low_v = _spin(0.0, -10.0, 10.0, 0.1, decimals=2)
         self.pulse_width = _spin(0.010, 1e-6, 10.0, 0.001, decimals=6)
         self.period = _spin(1.0, 0.01, 60.0, 0.1, decimals=3)
-        self.n_pulses = _int_spin(20, 1, 10_000)
+        self.n_pulses = _int_spin(20, 1, 100_000)
         pulse_form.addRow("Aux Out channel", self.aux_ch)
         pulse_form.addRow("High (V)", self.high_v)
         pulse_form.addRow("Low (V)", self.low_v)
@@ -141,17 +147,8 @@ class ControlPanel(QWidget):
         # Acquisition group
         acq = QGroupBox("Acquisition")
         acq_form = QFormLayout(acq)
-        self.pre_trig = _spin(0.001, 0.0, 1.0, 0.001, decimals=6)
-        self.duration = _spin(0.5, 1e-3, 60.0, 0.05, decimals=4)
-        self.reps = _int_spin(1, 1, 1000)
-        self.trig_src = QComboBox()
-        self.trig_src.addItems([s.value for s in TriggerSource])
-        self.trig_level = _spin(1.0, -10.0, 10.0, 0.1, decimals=3)
-        acq_form.addRow("Pre-trigger (s)", self.pre_trig)
-        acq_form.addRow("Duration (s)", self.duration)
-        acq_form.addRow("Repetitions", self.reps)
-        acq_form.addRow("Trigger source", self.trig_src)
-        acq_form.addRow("Trigger level (V)", self.trig_level)
+        self.poll_interval = _spin(0.05, 0.005, 1.0, 0.01, decimals=4)
+        acq_form.addRow("Poll interval (s)", self.poll_interval)
         layout.addWidget(acq)
 
         # Run / save buttons
@@ -188,14 +185,34 @@ class ControlPanel(QWidget):
                 period_s=self.period.value(),
                 n_pulses=self.n_pulses.value(),
             ),
-            acq=AcquisitionSettings(
-                pre_trigger_s=self.pre_trig.value(),
-                duration_s=self.duration.value(),
-                repetitions=self.reps.value(),
-                trigger_source=TriggerSource(self.trig_src.currentText()),
-                trigger_level_v=self.trig_level.value(),
-            ),
+            acq=AcquisitionSettings(poll_interval_s=self.poll_interval.value()),
         )
+
+
+class _GrowingBuffer:
+    """Append-only float buffer with amortized O(1) growth."""
+
+    def __init__(self, initial: int = 100_000) -> None:
+        self._buf = np.empty(initial, dtype=float)
+        self._size = 0
+
+    @property
+    def size(self) -> int:
+        return self._size
+
+    def view(self) -> np.ndarray:
+        return self._buf[: self._size]
+
+    def append(self, data: np.ndarray) -> None:
+        need = self._size + data.size
+        if need > self._buf.size:
+            new_cap = max(need, 2 * self._buf.size)
+            self._buf = np.resize(self._buf, new_cap)
+        self._buf[self._size : need] = data
+        self._size = need
+
+    def clear(self) -> None:
+        self._size = 0
 
 
 class MainWindow(QMainWindow):
@@ -215,8 +232,12 @@ class MainWindow(QMainWindow):
         self.cp_plot.showGrid(x=True, y=True, alpha=0.3)
         self.gp_plot.showGrid(x=True, y=True, alpha=0.3)
         self.gp_plot.setXLink(self.cp_plot)
-        self.cp_curve = self.cp_plot.plot(pen=pg.mkPen("c", width=1), connect="finite")
-        self.gp_curve = self.gp_plot.plot(pen=pg.mkPen("c", width=1), connect="finite")
+        # Subsample on display for performance while keeping full data in memory.
+        for p in (self.cp_plot, self.gp_plot):
+            p.setDownsampling(auto=True, mode="peak")
+            p.setClipToView(True)
+        self.cp_curve = self.cp_plot.plot(pen=pg.mkPen("c", width=1))
+        self.gp_curve = self.gp_plot.plot(pen=pg.mkPen("c", width=1))
 
         self.progress = QProgressBar()
         self.status_label = QLabel("Idle.")
@@ -235,20 +256,28 @@ class MainWindow(QMainWindow):
         self.controls.stop_btn.clicked.connect(self.stop)
         self.controls.save_btn.clicked.connect(self.save)
 
-        self._segments: list[CtSegment] = []
-        self._timeline_t: list[np.ndarray] = []
-        self._timeline_cp: list[np.ndarray] = []
-        self._timeline_gp: list[np.ndarray] = []
+        self._t_buf = _GrowingBuffer()
+        self._cp_buf = _GrowingBuffer()
+        self._gp_buf = _GrowingBuffer()
+        self._pulse_lines_cp: list[pg.InfiniteLine] = []
+        self._pulse_lines_gp: list[pg.InfiniteLine] = []
+        self._pulse_times: list[float] = []
         self._cfg: CtConfig | None = None
         self._thread: QThread | None = None
         self._worker: AcquisitionWorker | None = None
 
     def start(self) -> None:
         self._cfg = self.controls.config()
-        self._segments = []
-        self._timeline_t = []
-        self._timeline_cp = []
-        self._timeline_gp = []
+        self._t_buf.clear()
+        self._cp_buf.clear()
+        self._gp_buf.clear()
+        self._pulse_times = []
+        for line in self._pulse_lines_cp:
+            self.cp_plot.removeItem(line)
+        for line in self._pulse_lines_gp:
+            self.gp_plot.removeItem(line)
+        self._pulse_lines_cp = []
+        self._pulse_lines_gp = []
         self.cp_curve.setData([], [])
         self.gp_curve.setData([], [])
         self.progress.setMaximum(self._cfg.pulse.n_pulses)
@@ -259,7 +288,8 @@ class MainWindow(QMainWindow):
         self._worker = AcquisitionWorker(self.backend, self._cfg)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
-        self._worker.segment.connect(self._on_segment)
+        self._worker.chunk.connect(self._on_chunk)
+        self._worker.pulse_count.connect(self._on_pulse_count)
         self._worker.error.connect(self._on_error)
         self._worker.finished.connect(self._on_finished)
         self._thread.start()
@@ -272,28 +302,32 @@ class MainWindow(QMainWindow):
         if self._worker:
             self._worker.stop()
 
-    def _on_segment(self, seg: CtSegment) -> None:
-        assert self._cfg is not None
-        self._segments.append(seg)
+    def _on_chunk(self, chunk: StreamChunk) -> None:
+        self._t_buf.append(chunk.t)
+        self._cp_buf.append(chunk.cp)
+        self._gp_buf.append(chunk.gp)
+        t_view = self._t_buf.view()
+        self.cp_curve.setData(t_view, self._cp_buf.view())
+        self.gp_curve.setData(t_view, self._gp_buf.view())
 
-        # Place each segment on the timeline at its measured t0_s (recorded
-        # when the trigger fired). NaN gaps between segments make "no data
-        # was recorded here" visually obvious rather than connecting across
-        # the gap with a straight line.
-        t_abs = seg.t0_s + seg.t
-        nan_gap = np.array([np.nan])
-        if self._timeline_t:
-            self._timeline_t.append(nan_gap)
-            self._timeline_cp.append(nan_gap)
-            self._timeline_gp.append(nan_gap)
-        self._timeline_t.append(t_abs)
-        self._timeline_cp.append(seg.cp)
-        self._timeline_gp.append(seg.gp)
-
-        t_all = np.concatenate(self._timeline_t)
-        self.cp_curve.setData(t_all, np.concatenate(self._timeline_cp))
-        self.gp_curve.setData(t_all, np.concatenate(self._timeline_gp))
-        self.progress.setValue(len(self._segments))
+    def _on_pulse_count(self, n: int) -> None:
+        # Mirror the pulser's pulse_times list — read from the experiment via worker.
+        assert self._worker is not None and self._worker._exp is not None
+        new_times = self._worker._exp.pulse_times
+        # Add lines for any pulses we haven't drawn yet.
+        for t in new_times[len(self._pulse_times) :]:
+            line_cp = pg.InfiniteLine(
+                pos=t, angle=90, pen=pg.mkPen("m", width=1, style=2)
+            )
+            line_gp = pg.InfiniteLine(
+                pos=t, angle=90, pen=pg.mkPen("m", width=1, style=2)
+            )
+            self.cp_plot.addItem(line_cp)
+            self.gp_plot.addItem(line_gp)
+            self._pulse_lines_cp.append(line_cp)
+            self._pulse_lines_gp.append(line_gp)
+        self._pulse_times = new_times
+        self.progress.setValue(n)
 
     def _on_error(self, msg: str) -> None:
         self.status_label.setText(f"Error: {msg}")
@@ -305,18 +339,27 @@ class MainWindow(QMainWindow):
             self._thread.wait()
         self.controls.start_btn.setEnabled(True)
         self.controls.stop_btn.setEnabled(False)
-        self.controls.save_btn.setEnabled(bool(self._segments))
-        self.status_label.setText(f"Done. {len(self._segments)} segments.")
+        self.controls.save_btn.setEnabled(self._t_buf.size > 0)
+        self.status_label.setText(
+            f"Done. {self._t_buf.size} samples, {len(self._pulse_times)} pulses."
+        )
 
     def save(self) -> None:
-        if not self._segments or self._cfg is None:
+        if self._t_buf.size == 0 or self._cfg is None:
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save run", "ct_run.h5", "HDF5 files (*.h5 *.hdf5)"
         )
         if not path:
             return
-        out = save_run(path, self._cfg, self._segments)
+        out = save_run(
+            path,
+            self._cfg,
+            self._t_buf.view().copy(),
+            self._cp_buf.view().copy(),
+            self._gp_buf.view().copy(),
+            self._pulse_times,
+        )
         self.status_label.setText(f"Saved to {out}")
 
 

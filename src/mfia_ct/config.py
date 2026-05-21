@@ -1,8 +1,8 @@
 """Experiment configuration dataclasses.
 
 A `CtConfig` is a complete description of one photo-C-t run: instrument
-settings, trigger setup, optical pulse parameters, and acquisition window.
-It is saved alongside the data so a run is fully reproducible.
+settings, optical pulse parameters, and acquisition pacing. It is saved
+alongside the data so a run is fully reproducible.
 """
 
 from __future__ import annotations
@@ -16,24 +16,6 @@ class EquivCircuit(str, Enum):
 
     CP_RP = "Cp||Rp"
     CS_RS = "Cs-Rs"
-
-
-class TriggerSource(str, Enum):
-    """Where the DAQ module gets its trigger edge.
-
-    SOFTWARE: MFIA toggles Aux Out for the optical pulse and the host software
-        force-triggers the DAQ module on the same call. No cabling needed.
-        Software latency limits time precision to ~1 ms.
-    TRIGGER_IN_1: hardware trigger via back-panel Trigger In 1 BNC. Sub-µs
-        precision. Used either by looping Aux Out → Trigger In 1 with a BNC
-        cable (MFIA-internal pulse generation), or by feeding an external
-        laser/LED sync signal directly into Trigger In 1.
-    TRIGGER_IN_2: same as above on the back-panel Trigger In 2 BNC.
-    """
-
-    SOFTWARE = "software"
-    TRIGGER_IN_1 = "Trigger In 1"
-    TRIGGER_IN_2 = "Trigger In 2"
 
 
 @dataclass
@@ -54,11 +36,7 @@ class DemodSettings:
 
 @dataclass
 class PulseSettings:
-    """Optical pulse parameters.
-
-    For INTERNAL trigger source, these drive Aux Out N to produce a square pulse.
-    For EXTERNAL, only `period_s` is used (to set the DAQ hold-off / count).
-    """
+    """Optical pulse parameters; drives Aux Out N as a software-paced square wave."""
 
     aux_out_channel: int = 0
     high_v: float = 5.0
@@ -70,12 +48,9 @@ class PulseSettings:
 
 @dataclass
 class AcquisitionSettings:
-    pre_trigger_s: float = 0.001
-    duration_s: float = 0.500
-    repetitions: int = 1
-    trigger_source: TriggerSource = TriggerSource.SOFTWARE
-    trigger_level_v: float = 1.0
-    trigger_hysteresis_v: float = 0.1
+    """Continuous-acquisition pacing."""
+
+    poll_interval_s: float = 0.05
 
 
 @dataclass

@@ -1,14 +1,19 @@
-"""Synthetic backend that emits plausible photo-C-t transients.
+"""Synthetic continuous backend.
 
-Lets the full GUI run without a connected MFIA. Models a simple two-exponential
-photo-capacitance response: fast rise on light-on, slower exponential approach
-to a photoinduced steady-state, then double-exponential recovery on light-off.
+Streams Cp(t), Gp(t) with a configurable DC baseline plus photo-transients
+that respond to pulse times recorded via ``record_pulse()``. Lets the full
+GUI run without a connected MFIA.
 """
 
 from __future__ import annotations
 
+import threading
+import time
+from typing import Optional
+
 import numpy as np
 
+from .acquisition import StreamChunk
 from .config import CtConfig
 
 
@@ -18,8 +23,24 @@ class MockMFIA:
 
     def __init__(self, seed: int = 0) -> None:
         self._rng = np.random.default_rng(seed)
-        self._cfg: CtConfig | None = None
+        self._cfg: Optional[CtConfig] = None
+        self._t_zero_mono: Optional[float] = None
+        self._last_emitted_s: float = 0.0
+        self._pulses: list[float] = []
+        self._pulses_lock = threading.Lock()
+        # Device-physics constants for the synthetic transient.
+        self._c_dc = 10e-12
+        self._g_dc = 1e-9
+        self._delta_c = -1e-12  # depletion drop on illumination
+        self._delta_g = 5e-9
+        self._tau_on_fast = 5e-5
+        self._tau_on_slow = 5e-3
+        self._a_on = 0.6
+        self._tau_off_fast = 3e-4
+        self._tau_off_slow = 5e-2
+        self._a_off = 0.4
 
+    # zhinst-equivalent interface ---------------------------------------------
     def connect(self) -> None:
         pass
 
@@ -45,56 +66,71 @@ class MockMFIA:
     def imps_sample_path(self) -> str:
         return "/mock/imps/0/sample"
 
-    def generate_trace(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return (t, Cp, Gp) for one trigger segment.
+    # Continuous acquisition --------------------------------------------------
+    def start_continuous(self) -> None:
+        self._t_zero_mono = time.monotonic()
+        self._last_emitted_s = 0.0
+        with self._pulses_lock:
+            self._pulses = []
 
-        The DC capacitance is set to 10 pF; on-light photoresponse adds ~1 pF
-        with fast (50 µs) and slow (5 ms) components; off-light decays with a
-        300 µs and 50 ms double exponential. Channel conductance Gp tracks
-        capacitance but with opposite sign — photo-generated carriers raise
-        conductance and (in a depletion-modulated FET) drop measured C.
-        """
-        if self._cfg is None:
-            raise RuntimeError("configure_impedance() must be called first")
-        acq = self._cfg.acq
-        pulse = self._cfg.pulse
+    def stop_continuous(self) -> None:
+        pass
+
+    def record_pulse(self, t_s: float) -> None:
+        """Called by the Pulser whenever Aux Out goes high."""
+        with self._pulses_lock:
+            self._pulses.append(t_s)
+
+    def poll_continuous(self, length_s: float, timeout_ms: int = 500) -> Optional[StreamChunk]:
+        if self._cfg is None or self._t_zero_mono is None:
+            return None
+        time.sleep(length_s)
+        now = time.monotonic() - self._t_zero_mono
         rate = self._cfg.demod.sample_rate_hz
+        n_new = int((now - self._last_emitted_s) * rate)
+        if n_new <= 0:
+            return None
+        dt = 1.0 / rate
+        t = self._last_emitted_s + np.arange(1, n_new + 1) * dt
+        cp, gp = self._synthesize(t)
+        self._last_emitted_s = float(t[-1])
+        return StreamChunk(t=t, cp=cp, gp=gp)
 
-        n = int(acq.duration_s * rate)
-        t = np.linspace(-acq.pre_trigger_s, acq.duration_s - acq.pre_trigger_s, n)
+    def _synthesize(self, t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        assert self._cfg is not None
+        cp = np.full_like(t, self._c_dc)
+        gp = np.full_like(t, self._g_dc)
 
-        c_dc = 10e-12
-        delta_c = -1e-12  # depletion-mediated drop on illumination
-        g_dc = 1e-9
-        delta_g = 5e-9
+        pw = self._cfg.pulse.pulse_width_s
+        with self._pulses_lock:
+            pulses = list(self._pulses)
 
-        on_mask = (t >= 0) & (t < pulse.pulse_width_s)
-        off_mask = t >= pulse.pulse_width_s
+        # Approach toward photoinduced steady state during the pulse, then
+        # double-exponential recovery once it's over.
+        end_approach = 1 - (
+            self._a_on * np.exp(-pw / self._tau_on_fast)
+            + (1 - self._a_on) * np.exp(-pw / self._tau_on_slow)
+        )
+        for pt in pulses:
+            on = (t >= pt) & (t < pt + pw)
+            on_t = t[on] - pt
+            approach = 1 - (
+                self._a_on * np.exp(-on_t / self._tau_on_fast)
+                + (1 - self._a_on) * np.exp(-on_t / self._tau_on_slow)
+            )
+            cp[on] += self._delta_c * approach
+            gp[on] += self._delta_g * approach
 
-        cp = np.full_like(t, c_dc)
-        gp = np.full_like(t, g_dc)
+            off = t >= pt + pw
+            off_t = t[off] - pt - pw
+            decay = self._a_off * np.exp(-off_t / self._tau_off_fast) + (
+                1 - self._a_off
+            ) * np.exp(-off_t / self._tau_off_slow)
+            cp[off] += self._delta_c * end_approach * decay
+            gp[off] += self._delta_g * end_approach * decay
 
-        # On transient: 1 - (a*exp(-t/tau_f) + (1-a)*exp(-t/tau_s)) approach
-        tau_f, tau_s, a = 5e-5, 5e-3, 0.6
-        on_t = t[on_mask]
-        approach = 1 - (a * np.exp(-on_t / tau_f) + (1 - a) * np.exp(-on_t / tau_s))
-        cp[on_mask] += delta_c * approach
-        gp[on_mask] += delta_g * approach
-
-        # Off transient: start from where on transient ended, decay back
-        c_at_off = cp[on_mask][-1] - c_dc if on_mask.any() else 0
-        g_at_off = gp[on_mask][-1] - g_dc if on_mask.any() else 0
-        tau_f_off, tau_s_off, b = 3e-4, 5e-2, 0.4
-        off_t = t[off_mask] - pulse.pulse_width_s
-        decay = b * np.exp(-off_t / tau_f_off) + (1 - b) * np.exp(-off_t / tau_s_off)
-        cp[off_mask] = c_dc + c_at_off * decay
-        gp[off_mask] = g_dc + g_at_off * decay
-
-        # Noise floor scaled to demod TC: ~1 aF/√Hz @ 1 MHz BW (toy estimate)
-        enbw = 1 / (8 * self._cfg.demod.time_constant_s)
-        cp_noise = 1e-18 * np.sqrt(enbw)
-        gp_noise = 1e-12 * np.sqrt(enbw)
-        cp += self._rng.normal(0, cp_noise, n)
-        gp += self._rng.normal(0, gp_noise, n)
-
-        return t, cp, gp
+        # Noise floor scaled to demod TC (toy estimate).
+        enbw = 1.0 / (8 * self._cfg.demod.time_constant_s)
+        cp += self._rng.normal(0, 1e-18 * np.sqrt(enbw), len(t))
+        gp += self._rng.normal(0, 1e-12 * np.sqrt(enbw), len(t))
+        return cp, gp

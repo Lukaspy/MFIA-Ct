@@ -2,14 +2,17 @@
 
 Mirrors the patterns in the official examples (mf/python/example_poll_impedance.py
 and hf2-mf-uhf/python/example_data_acquisition_edge.py): an API session is
-created against the data server, then nodes are configured via `daq.set(...)`
-and the DAQ module is obtained via `daq.dataAcquisitionModule()`.
+created against the data server, then nodes are configured via `daq.set(...)`.
+Continuous acquisition uses `daq.subscribe` + `daq.poll` on the IA sample node.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
+import numpy as np
+
+from .acquisition import StreamChunk
 from .config import CtConfig, EquivCircuit
 
 # Equivalent-circuit selectors as exposed by /dev/imps/N/model.
@@ -21,13 +24,6 @@ _EQUIV_CIRCUIT_NODE_VALUE = {
 
 
 class MFIA:
-    """Thin wrapper around a zhinst data-server session.
-
-    The connection is established by `connect()`; the underlying `daq` handle
-    and `device` id are exposed as attributes so that acquisition.py can build
-    a DAQ module against the same session.
-    """
-
     def __init__(
         self,
         device_id: str,
@@ -41,18 +37,16 @@ class MFIA:
         self.api_level = api_level
         self.daq: Any = None
         self.device: str = ""
-        self._props: Any = None
+        self._t_zero_ticks: Optional[int] = None
+        self._clockbase_cached: float = 0.0
+        self._subscribed: bool = False
 
     def connect(self) -> None:
         """Open a session against the LabOne data server and attach the device.
 
         Bypasses ``zhinst.utils.create_api_session`` because its multicast
         discovery step fails on networks where UDP multicast is blocked or
-        routed away — even when the data server is directly reachable via
-        TCP. Attaching the device explicitly with ``connectDevice`` works in
-        both the LAN-discovered and direct-IP cases, and is a no-op when
-        connecting to the MFIA's embedded data server (where the device is
-        already attached).
+        routed away.
         """
         import zhinst.core
         import zhinst.utils
@@ -99,7 +93,6 @@ class MFIA:
         self.disconnect()
 
     def configure_impedance(self, cfg: CtConfig) -> None:
-        """Configure the IA module per the experiment config."""
         if self.daq is None:
             raise RuntimeError("MFIA.connect() must be called first")
         dev = self.device
@@ -108,9 +101,9 @@ class MFIA:
 
         settings = [
             (f"/{dev}/imps/{ia.imp_index}/enable", 1),
-            (f"/{dev}/imps/{ia.imp_index}/mode", 0),  # 4-terminal / standard
+            (f"/{dev}/imps/{ia.imp_index}/mode", 0),
             (f"/{dev}/imps/{ia.imp_index}/auto/output", 1),
-            (f"/{dev}/imps/{ia.imp_index}/auto/bw", 0),  # manual BW so TC sticks
+            (f"/{dev}/imps/{ia.imp_index}/auto/bw", 0),
             (f"/{dev}/imps/{ia.imp_index}/freq", ia.frequency_hz),
             (f"/{dev}/imps/{ia.imp_index}/output/amplitude", ia.ac_amplitude_v),
             (f"/{dev}/imps/{ia.imp_index}/bias/value", ia.dc_bias_v),
@@ -124,7 +117,6 @@ class MFIA:
         self.daq.sync()
 
     def set_aux_out(self, channel: int, value_v: float) -> None:
-        """Set Aux Out to a static voltage (used to drive the LED in INTERNAL mode)."""
         if self.daq is None:
             raise RuntimeError("MFIA.connect() must be called first")
         self.daq.set(
@@ -135,8 +127,46 @@ class MFIA:
         )
 
     def clockbase(self) -> float:
-        return float(self.daq.getInt(f"/{self.device}/clockbase"))
+        if not self._clockbase_cached:
+            self._clockbase_cached = float(self.daq.getInt(f"/{self.device}/clockbase"))
+        return self._clockbase_cached
 
     @property
     def imps_sample_path(self) -> str:
         return f"/{self.device}/imps/0/sample"
+
+    # --- Continuous acquisition ----------------------------------------------
+
+    def start_continuous(self) -> None:
+        if self.daq is None:
+            raise RuntimeError("MFIA.connect() must be called first")
+        self._t_zero_ticks = None
+        self._ = self.clockbase()  # warm cache
+        self.daq.subscribe(self.imps_sample_path)
+        self._subscribed = True
+
+    def stop_continuous(self) -> None:
+        if self._subscribed and self.daq is not None:
+            try:
+                self.daq.unsubscribe(self.imps_sample_path)
+            except Exception:
+                pass
+        self._subscribed = False
+
+    def poll_continuous(self, length_s: float, timeout_ms: int = 500) -> Optional[StreamChunk]:
+        """Pull whatever IA samples have accumulated since the last poll."""
+        if not self._subscribed:
+            return None
+        data = self.daq.poll(length_s, timeout_ms, 0, True)
+        if self.imps_sample_path not in data:
+            return None
+        sample = data[self.imps_sample_path]
+        ts = np.asarray(sample["timestamp"])
+        if ts.size == 0:
+            return None
+        if self._t_zero_ticks is None:
+            self._t_zero_ticks = int(ts[0])
+        t = (ts - self._t_zero_ticks) / self._clockbase_cached
+        cp = np.asarray(sample["param1"], dtype=float)
+        gp = np.asarray(sample["param0"], dtype=float)
+        return StreamChunk(t=t, cp=cp, gp=gp)

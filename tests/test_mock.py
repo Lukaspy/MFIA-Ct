@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import h5py
 import numpy as np
-import pytest
 
 from mfia_ct.config import CtConfig
 from mfia_ct.experiment import CtExperiment
@@ -11,54 +11,63 @@ from mfia_ct.mock_hardware import MockMFIA
 from mfia_ct.storage import save_run
 
 
-def test_mock_yields_n_segments() -> None:
+def _fast_cfg(n_pulses: int = 3) -> CtConfig:
     cfg = CtConfig()
-    cfg.pulse.n_pulses = 5
-    cfg.acq.duration_s = 0.05
-    cfg.pulse.period_s = 0.01
+    cfg.pulse.n_pulses = n_pulses
+    cfg.pulse.period_s = 0.02
+    cfg.pulse.pulse_width_s = 0.005
+    cfg.acq.poll_interval_s = 0.005
+    cfg.demod.sample_rate_hz = 10_000.0
+    return cfg
 
+
+def test_continuous_stream_emits_chunks() -> None:
+    cfg = _fast_cfg(n_pulses=3)
     backend = MockMFIA()
-    segments = list(CtExperiment(backend, cfg).run())
+    exp = CtExperiment(backend, cfg)
 
-    assert len(segments) == 5
-    for seg in segments:
-        assert seg.t.shape == seg.cp.shape == seg.gp.shape
-        assert np.isfinite(seg.cp).all()
-        assert np.isfinite(seg.gp).all()
+    chunks = list(exp.run())
+    assert len(chunks) > 0
 
-    # t0_s should be monotonically non-decreasing across pulses.
-    t0s = [s.t0_s for s in segments]
-    assert t0s == sorted(t0s)
-    assert t0s[0] >= 0.0
+    t = np.concatenate([c.t for c in chunks])
+    cp = np.concatenate([c.cp for c in chunks])
+    gp = np.concatenate([c.gp for c in chunks])
+
+    # Time axis is monotonic non-decreasing.
+    assert np.all(np.diff(t) >= 0)
+    # Stream covers at least the pulse train duration.
+    assert t[-1] >= (cfg.pulse.n_pulses - 1) * cfg.pulse.period_s
+    # Data is finite.
+    assert np.isfinite(cp).all() and np.isfinite(gp).all()
+
+    # Pulser actually fired the requested number of pulses.
+    assert len(exp.pulse_times) == cfg.pulse.n_pulses
+
+
+def test_pulse_times_match_period() -> None:
+    cfg = _fast_cfg(n_pulses=5)
+    exp = CtExperiment(MockMFIA(), cfg)
+    list(exp.run())
+    times = exp.pulse_times
+    assert len(times) == 5
+
+    # Inter-pulse spacing should be close to period_s (allow software jitter).
+    diffs = np.diff(times)
+    assert np.allclose(diffs, cfg.pulse.period_s, atol=0.02)
 
 
 def test_save_run_roundtrip(tmp_path) -> None:
-    import h5py
+    cfg = _fast_cfg(n_pulses=3)
+    exp = CtExperiment(MockMFIA(), cfg)
+    chunks = list(exp.run())
+    t = np.concatenate([c.t for c in chunks])
+    cp = np.concatenate([c.cp for c in chunks])
+    gp = np.concatenate([c.gp for c in chunks])
 
-    cfg = CtConfig()
-    cfg.pulse.n_pulses = 3
-    cfg.pulse.period_s = 0.001
-    cfg.acq.duration_s = 0.02
-    backend = MockMFIA()
-    segments = list(CtExperiment(backend, cfg).run())
-
-    out = save_run(tmp_path / "run.h5", cfg, segments)
+    out = save_run(tmp_path / "run.h5", cfg, t, cp, gp, exp.pulse_times)
 
     with h5py.File(out, "r") as f:
-        assert f.attrs["n_segments"] == 3
-        assert f["segments/0000/t"].shape == segments[0].t.shape
-        assert f["segments/0000"].attrs["pulse_index"] == 0
-        assert "segments/0002" in f
-
-
-def test_mock_baseline_is_dc_capacitance() -> None:
-    """Mean Cp before t=0 should sit near the configured 10 pF baseline."""
-    cfg = CtConfig()
-    cfg.pulse.n_pulses = 1
-    cfg.pulse.period_s = 0.001
-    cfg.acq.duration_s = 0.05
-    cfg.acq.pre_trigger_s = 0.01
-
-    seg = next(CtExperiment(MockMFIA(), cfg).run())
-    baseline = seg.cp[seg.t < 0].mean()
-    assert baseline == pytest.approx(10e-12, rel=0.1)
+        assert f.attrs["n_samples"] == t.size
+        assert f.attrs["n_pulses"] == len(exp.pulse_times)
+        assert f["stream/t"].shape == t.shape
+        assert f["pulse_times"].shape == (len(exp.pulse_times),)
