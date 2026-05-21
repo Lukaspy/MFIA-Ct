@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -315,13 +315,10 @@ class MainWindow(QMainWindow):
         assert self._worker is not None and self._worker._exp is not None
         new_times = self._worker._exp.pulse_times
         # Add lines for any pulses we haven't drawn yet.
+        pen = pg.mkPen("m", width=1, style=Qt.PenStyle.DashLine)
         for t in new_times[len(self._pulse_times) :]:
-            line_cp = pg.InfiniteLine(
-                pos=t, angle=90, pen=pg.mkPen("m", width=1, style=2)
-            )
-            line_gp = pg.InfiniteLine(
-                pos=t, angle=90, pen=pg.mkPen("m", width=1, style=2)
-            )
+            line_cp = pg.InfiniteLine(pos=t, angle=90, pen=pen)
+            line_gp = pg.InfiniteLine(pos=t, angle=90, pen=pen)
             self.cp_plot.addItem(line_cp)
             self.gp_plot.addItem(line_gp)
             self._pulse_lines_cp.append(line_cp)
