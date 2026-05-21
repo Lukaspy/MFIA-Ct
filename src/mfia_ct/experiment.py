@@ -1,10 +1,13 @@
-"""Orchestrates a continuous photo-C-t run.
+"""Single-threaded continuous photo-C-t orchestrator.
 
-The MFIA streams Cp(t) and Gp(t) at the demod rate. A background ``Pulser``
-thread software-paces Aux Out as the optical pulse train and records the
-moment each pulse fires. ``CtExperiment.run()`` is a generator that yields
-``StreamChunk``s as they arrive from ``poll_continuous``; pulse timings are
-queryable via ``pulse_times`` at any point.
+The zhinst ziDAQServer Python client is not safe under concurrent access
+from multiple OS threads — calling ``daq.set`` from one thread while a
+``daq.poll`` is in flight on another reliably segfaults. So pulse pacing
+and IA-sample polling share one loop here: each iteration checks the
+pulse schedule, toggles Aux Out at the right moment, then polls for new
+samples. Poll length is shortened on the fly when the next pulse edge is
+closer than the configured ``poll_interval_s`` — that bounds pulse jitter
+to ~1 ms regardless of how lazily the user wants the GUI to update.
 """
 
 from __future__ import annotations
@@ -27,93 +30,19 @@ class _Backend(Protocol):
     def poll_continuous(self, length_s: float) -> StreamChunk | None: ...
 
 
-class _Pulser:
-    """Background thread that software-paces Aux Out and timestamps each edge."""
-
-    def __init__(self, backend: _Backend, cfg: CtConfig) -> None:
-        self.backend = backend
-        self.cfg = cfg
-        self._stop = threading.Event()
-        self._lock = threading.Lock()
-        self._times: list[float] = []
-        self._t_start: float = 0.0
-        self._thread: threading.Thread | None = None
-        self._done = threading.Event()
-
-    @property
-    def pulse_times(self) -> list[float]:
-        with self._lock:
-            return list(self._times)
-
-    def is_done(self) -> bool:
-        return self._done.is_set()
-
-    def start(self, t_start: float) -> None:
-        self._t_start = t_start
-        self._thread = threading.Thread(target=self._run, name="ct-pulser", daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
-
-    def _run(self) -> None:
-        ch = self.cfg.pulse.aux_out_channel
-        period = self.cfg.pulse.period_s
-        width = self.cfg.pulse.pulse_width_s
-        n = self.cfg.pulse.n_pulses
-
-        try:
-            self.backend.set_aux_out(ch, self.cfg.pulse.low_v)
-            for i in range(n):
-                if self._stop.is_set():
-                    return
-                target = i * period
-                wait = target - (time.monotonic() - self._t_start)
-                if wait > 0 and self._stop.wait(wait):
-                    return
-
-                self.backend.set_aux_out(ch, self.cfg.pulse.high_v)
-                t_pulse = time.monotonic() - self._t_start
-                with self._lock:
-                    self._times.append(t_pulse)
-                if hasattr(self.backend, "record_pulse"):
-                    self.backend.record_pulse(t_pulse)  # for mock synthesis
-
-                if self._stop.wait(width):
-                    return
-                self.backend.set_aux_out(ch, self.cfg.pulse.low_v)
-        finally:
-            try:
-                self.backend.set_aux_out(ch, self.cfg.pulse.low_v)
-            except Exception:
-                pass
-            self._done.set()
+_MIN_POLL_S = 0.001
 
 
 class CtExperiment:
-    """Drive a continuous photo-C-t run.
-
-    Usage::
-
-        exp = CtExperiment(backend, cfg)
-        for chunk in exp.run():
-            # plot chunk; query exp.pulse_times when convenient
-            if user_wants_stop:
-                exp.stop()
-    """
-
     def __init__(self, backend: _Backend, cfg: CtConfig) -> None:
         self.backend = backend
         self.cfg = cfg
         self._stop = threading.Event()
-        self._pulser: _Pulser | None = None
-        self._t_start: float = 0.0
+        self._pulse_times: list[float] = []
 
     @property
     def pulse_times(self) -> list[float]:
-        return self._pulser.pulse_times if self._pulser else []
+        return list(self._pulse_times)
 
     def stop(self) -> None:
         self._stop.set()
@@ -121,33 +50,71 @@ class CtExperiment:
     def run(self) -> Iterator[StreamChunk]:
         self.backend.configure_impedance(self.cfg)
         self.backend.start_continuous()
-        self._t_start = time.monotonic()
+        t_start = time.monotonic()
 
-        self._pulser = _Pulser(self.backend, self.cfg)
-        self._pulser.start(self._t_start)
+        ch = self.cfg.pulse.aux_out_channel
+        high_v = self.cfg.pulse.high_v
+        low_v = self.cfg.pulse.low_v
+        period = self.cfg.pulse.period_s
+        width = self.cfg.pulse.pulse_width_s
+        n = self.cfg.pulse.n_pulses
+        poll_interval = self.cfg.acq.poll_interval_s
 
-        # Once the pulser finishes its train, drain this many extra seconds
-        # of trailing data so the last off-transient is captured before we
-        # stop on our own.
-        drain_after_done = max(self.cfg.pulse.period_s, 1.0)
-        done_at: float | None = None
+        next_pulse_i = 0
+        pulse_low_at: float | None = None
+        drain_until: float | None = None
+        drain_seconds = max(period, 1.0)
 
         try:
+            self.backend.set_aux_out(ch, low_v)
+
             while not self._stop.is_set():
-                chunk = self.backend.poll_continuous(self.cfg.acq.poll_interval_s)
+                now = time.monotonic() - t_start
+
+                # Rising edge of pulse N when due.
+                if next_pulse_i < n:
+                    rise_at = next_pulse_i * period
+                    if now >= rise_at:
+                        self.backend.set_aux_out(ch, high_v)
+                        t_pulse = time.monotonic() - t_start
+                        self._pulse_times.append(t_pulse)
+                        if hasattr(self.backend, "record_pulse"):
+                            self.backend.record_pulse(t_pulse)
+                        pulse_low_at = t_pulse + width
+                        next_pulse_i += 1
+
+                # Falling edge when the high period ends.
+                if pulse_low_at is not None:
+                    if (time.monotonic() - t_start) >= pulse_low_at:
+                        self.backend.set_aux_out(ch, low_v)
+                        pulse_low_at = None
+
+                # Shorten the poll if the next scheduled edge lands sooner
+                # than the configured poll interval — bounds pulse jitter.
+                now = time.monotonic() - t_start
+                next_edge = float("inf")
+                if next_pulse_i < n:
+                    next_edge = min(next_edge, next_pulse_i * period)
+                if pulse_low_at is not None:
+                    next_edge = min(next_edge, pulse_low_at)
+                poll_for = poll_interval
+                if next_edge != float("inf"):
+                    poll_for = min(poll_for, max(_MIN_POLL_S, next_edge - now))
+
+                chunk = self.backend.poll_continuous(poll_for)
                 if chunk is not None:
                     yield chunk
 
-                if done_at is None and self._pulser.is_done():
-                    done_at = time.monotonic()
-                if done_at is not None and time.monotonic() - done_at >= drain_after_done:
-                    break
+                # After all pulses have fired and dropped low, run a tail to
+                # capture the last off-transient, then stop.
+                if next_pulse_i >= n and pulse_low_at is None:
+                    if drain_until is None:
+                        drain_until = time.monotonic() + drain_seconds
+                    elif time.monotonic() >= drain_until:
+                        break
         finally:
-            self._pulser.stop()
             self.backend.stop_continuous()
             try:
-                self.backend.set_aux_out(
-                    self.cfg.pulse.aux_out_channel, self.cfg.pulse.low_v
-                )
+                self.backend.set_aux_out(ch, low_v)
             except Exception:
                 pass
