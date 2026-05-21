@@ -122,7 +122,10 @@ class ControlPanel(QWidget):
         # Pulse group
         pulse = QGroupBox("Optical pulse")
         pulse_form = QFormLayout(pulse)
-        self.aux_ch = _int_spin(0, 0, 3)
+        self.aux_ch = QComboBox()
+        # Front panel labels Aux Outputs 1-4; the API uses indices 0-3.
+        for i in range(4):
+            self.aux_ch.addItem(f"Aux Out {i + 1}", userData=i)
         self.high_v = _spin(5.0, 0.0, 10.0, 0.1, decimals=2)
         self.low_v = _spin(0.0, -10.0, 10.0, 0.1, decimals=2)
         self.pulse_width = _spin(0.010, 1e-6, 10.0, 0.001, decimals=6)
@@ -182,7 +185,7 @@ class ControlPanel(QWidget):
                 sample_rate_hz=self.demod_rate.value(),
             ),
             pulse=PulseSettings(
-                aux_out_channel=self.aux_ch.value(),
+                aux_out_channel=self.aux_ch.currentData(),
                 high_v=self.high_v.value(),
                 low_v=self.low_v.value(),
                 pulse_width_s=self.pulse_width.value(),

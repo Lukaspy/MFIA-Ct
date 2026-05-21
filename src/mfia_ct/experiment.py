@@ -55,6 +55,8 @@ class CtExperiment:
         acq.configure(self.cfg)
         acq.start()
 
+        use_force = self.cfg.acq.trigger_source == TriggerSource.SOFTWARE
+
         try:
             self.backend.set_aux_out(pulse.aux_out_channel, pulse.low_v)
             time.sleep(0.05)
@@ -63,7 +65,12 @@ class CtExperiment:
             for _ in range(pulse.n_pulses):
                 if acq.is_finished():
                     break
+                # Drive light pulse. In SOFTWARE mode we force the DAQ trigger
+                # immediately after raising Aux Out so the segment is aligned
+                # to the light-on edge.
                 self.backend.set_aux_out(pulse.aux_out_channel, pulse.high_v)
+                if use_force:
+                    acq.force_trigger()
                 time.sleep(pulse.pulse_width_s)
                 self.backend.set_aux_out(pulse.aux_out_channel, pulse.low_v)
                 time.sleep(max(0.0, pulse.period_s - pulse.pulse_width_s))
@@ -80,5 +87,4 @@ class CtExperiment:
                 yield seg
         finally:
             acq.stop()
-            if self.cfg.acq.trigger_source == TriggerSource.INTERNAL:
-                self.backend.set_aux_out(pulse.aux_out_channel, pulse.low_v)
+            self.backend.set_aux_out(pulse.aux_out_channel, pulse.low_v)

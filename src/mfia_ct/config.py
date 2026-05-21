@@ -21,12 +21,19 @@ class EquivCircuit(str, Enum):
 class TriggerSource(str, Enum):
     """Where the DAQ module gets its trigger edge.
 
-    INTERNAL: MFIA Aux Out generates the optical pulse and self-triggers the DAQ.
-    EXTERNAL: external laser/LED driver provides a sync pulse into Aux In.
+    SOFTWARE: MFIA toggles Aux Out for the optical pulse and the host software
+        force-triggers the DAQ module on the same call. No cabling needed.
+        Software latency limits time precision to ~1 ms.
+    TRIGGER_IN_1: hardware trigger via back-panel Trigger In 1 BNC. Sub-µs
+        precision. Used either by looping Aux Out → Trigger In 1 with a BNC
+        cable (MFIA-internal pulse generation), or by feeding an external
+        laser/LED sync signal directly into Trigger In 1.
+    TRIGGER_IN_2: same as above on the back-panel Trigger In 2 BNC.
     """
 
-    INTERNAL = "internal"
-    EXTERNAL = "external"
+    SOFTWARE = "software"
+    TRIGGER_IN_1 = "Trigger In 1"
+    TRIGGER_IN_2 = "Trigger In 2"
 
 
 @dataclass
@@ -66,8 +73,7 @@ class AcquisitionSettings:
     pre_trigger_s: float = 0.001
     duration_s: float = 0.500
     repetitions: int = 1
-    trigger_source: TriggerSource = TriggerSource.INTERNAL
-    trigger_aux_in_channel: int = 0
+    trigger_source: TriggerSource = TriggerSource.SOFTWARE
     trigger_level_v: float = 1.0
     trigger_hysteresis_v: float = 0.1
 

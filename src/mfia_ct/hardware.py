@@ -44,14 +44,43 @@ class MFIA:
         self._props: Any = None
 
     def connect(self) -> None:
+        """Open a session against the LabOne data server and attach the device.
+
+        Bypasses ``zhinst.utils.create_api_session`` because its multicast
+        discovery step fails on networks where UDP multicast is blocked or
+        routed away — even when the data server is directly reachable via
+        TCP. Attaching the device explicitly with ``connectDevice`` works in
+        both the LAN-discovered and direct-IP cases, and is a no-op when
+        connecting to the MFIA's embedded data server (where the device is
+        already attached).
+        """
+        import zhinst.core
         import zhinst.utils
 
-        self.daq, self.device, self._props = zhinst.utils.create_api_session(
-            self.device_id,
-            self.api_level,
-            server_host=self.server_host,
-            server_port=self.server_port,
+        self.daq = zhinst.core.ziDAQServer(
+            self.server_host, self.server_port, self.api_level
         )
+        devid = self.device_id.lower()
+
+        last_err: Exception | None = None
+        for iface in ("1GbE", "USB", "PCIe"):
+            try:
+                self.daq.connectDevice(devid, iface)
+                break
+            except RuntimeError as e:
+                last_err = e
+        else:
+            try:
+                visible = self.daq.getString("/zi/devices/visible")
+            except Exception:
+                visible = "(could not query)"
+            raise RuntimeError(
+                f"Could not attach {devid} to data server at "
+                f"{self.server_host}:{self.server_port}. "
+                f"Visible devices: {visible}. Last error: {last_err}"
+            )
+
+        self.device = devid
         zhinst.utils.disable_everything(self.daq, self.device)
 
     def disconnect(self) -> None:

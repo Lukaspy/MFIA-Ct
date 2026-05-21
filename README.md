@@ -9,13 +9,26 @@ pulse, and record C(t) and G(t) through the light-on / light-off transients.
 
 - Configures the MFIA's Impedance Analyzer (IA) module — test frequency, AC
   drive amplitude, DC bias, equivalent circuit model.
-- Triggers the Data Acquisition (DAQ) module on a TTL edge — either generated
-  by the MFIA's own Aux Out (internal pulse mode) or supplied by an external
-  laser/LED driver (external trigger mode).
-- Subscribes to `Cp` and `Gp` from the IA `sample` node, records aligned
-  segments around each trigger, averages across repetitions.
+- Triggers the Data Acquisition (DAQ) module per pulse and subscribes to
+  `Cp` and `Gp` from the IA `sample` node, recording aligned segments around
+  each trigger and averaging across repetitions.
 - Live-plots C(t) and G(t) traces in PyQt6 + pyqtgraph.
 - Saves runs to HDF5 with full instrument settings as metadata.
+
+## Trigger modes
+
+| Mode             | Cabling                                           | Precision       | Use when                            |
+|------------------|---------------------------------------------------|-----------------|-------------------------------------|
+| **Software**     | none                                              | ~1 ms (sw latency) | quick setup; slow transients     |
+| **Trigger In 1** | back-panel Trigger In 1 BNC (TTL)                 | sub-µs          | µs transients; precise alignment    |
+| **Trigger In 2** | back-panel Trigger In 2 BNC (TTL)                 | sub-µs          | second instrument or alternate path |
+
+In hardware modes either loop **Aux Out 1 → Trigger In 1** with a BNC cable
+so the MFIA self-triggers when it pulses Aux Out, or feed your external
+laser/LED driver's sync output directly into Trigger In 1.
+
+Note: front-panel Aux Outputs are labeled **1–4**; the API addresses them as
+indices **0–3**. The GUI dropdown shows the front-panel labels.
 
 A mock hardware backend lets you run the entire GUI without a connected MFIA —
 useful for development and dry-running an experiment plan before hitting the

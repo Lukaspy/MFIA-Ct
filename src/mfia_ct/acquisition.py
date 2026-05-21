@@ -43,10 +43,7 @@ class CtAcquisition:
         self.module = self.mfia.daq.dataAcquisitionModule()
         m = self.module
         m.set("device", dev)
-        m.set("type", 1)  # edge trigger
         m.set("edge", 1)  # rising
-        m.set("level", acq.trigger_level_v)
-        m.set("hysteresis", acq.trigger_hysteresis_v)
         m.set("count", cfg.pulse.n_pulses)
         m.set("delay", -acq.pre_trigger_s)
         m.set("duration", acq.duration_s)
@@ -60,19 +57,28 @@ class CtAcquisition:
         self._cp_path = f"{sample_path}.param1"
         self._gp_path = f"{sample_path}.param0"
 
-        if acq.trigger_source == TriggerSource.INTERNAL:
-            # Self-trigger off the same Aux Out that drives the LED. The Aux
-            # output value is mirrored on an internal node that can be used as
-            # a trigger source via the auxins path on instruments that route
-            # it; for compatibility we trigger off the demod sample bias node
-            # toggling instead.
-            trignode = f"/{dev}/auxouts/{cfg.pulse.aux_out_channel}/value"
+        # Trigger source selection. Software mode uses an edge trigger with
+        # an unreachable level so it only fires on explicit forceTrigger calls;
+        # hardware modes use the dedicated Trigger In BNCs (DAQ trigger type 6).
+        if acq.trigger_source == TriggerSource.SOFTWARE:
+            m.set("type", 1)  # edge
+            m.set("level", 1e9)  # unreachable; only forcetrigger will fire it
+            m.set("hysteresis", 0.0)
+            m.set("triggernode", f"{sample_path}.param1")
         else:
-            trignode = f"/{dev}/auxins/{acq.trigger_aux_in_channel}/sample.value"
-        m.set("triggernode", trignode)
+            trig_idx = 0 if acq.trigger_source == TriggerSource.TRIGGER_IN_1 else 1
+            m.set("type", 6)  # HW trigger on dedicated Trigger In BNC
+            m.set("level", acq.trigger_level_v)
+            m.set("hysteresis", acq.trigger_hysteresis_v)
+            m.set("triggernode", f"/{dev}/demods/{imp}/sample.TrigIn{trig_idx + 1}")
 
         m.subscribe(self._cp_path)
         m.subscribe(self._gp_path)
+
+    def force_trigger(self) -> None:
+        """Manually fire one trigger event (used in SOFTWARE trigger mode)."""
+        if self.module is not None:
+            self.module.set("forcetrigger", 1)
 
     def start(self) -> None:
         if self.module is None:
