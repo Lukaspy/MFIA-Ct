@@ -15,7 +15,6 @@ import pyqtgraph as pg
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -161,14 +160,11 @@ class ControlPanel(QWidget):
         self.stop_btn.setEnabled(False)
         self.save_btn = QPushButton("Save HDF5…")
         self.save_btn.setEnabled(False)
-        self.show_average = QCheckBox("Show average")
-        self.show_average.setChecked(True)
         btns = QHBoxLayout()
         btns.addWidget(self.start_btn)
         btns.addWidget(self.stop_btn)
         btns.addWidget(self.save_btn)
         layout.addLayout(btns)
-        layout.addWidget(self.show_average)
         layout.addStretch()
 
     def config(self) -> CtConfig:
@@ -210,18 +206,17 @@ class MainWindow(QMainWindow):
 
         self.controls = ControlPanel()
         self.plot_widget = pg.GraphicsLayoutWidget()
-        self.cp_plot = self.plot_widget.addPlot(row=0, col=0, title="Cp (F)")
-        self.gp_plot = self.plot_widget.addPlot(row=1, col=0, title="Gp (S)")
-        self.cp_plot.setLabel("bottom", "Time", "s")
-        self.gp_plot.setLabel("bottom", "Time", "s")
+        self.cp_plot = self.plot_widget.addPlot(row=0, col=0, title="Cp")
+        self.gp_plot = self.plot_widget.addPlot(row=1, col=0, title="Gp")
+        self.cp_plot.setLabel("left", "Cp", "F")
+        self.gp_plot.setLabel("left", "Gp", "S")
+        self.cp_plot.setLabel("bottom", "Experiment time", "s")
+        self.gp_plot.setLabel("bottom", "Experiment time", "s")
         self.cp_plot.showGrid(x=True, y=True, alpha=0.3)
         self.gp_plot.showGrid(x=True, y=True, alpha=0.3)
-        self.cp_plot.addLegend()
-        self.gp_plot.addLegend()
-        self.cp_avg = self.cp_plot.plot(pen=pg.mkPen("y", width=2), name="avg")
-        self.gp_avg = self.gp_plot.plot(pen=pg.mkPen("y", width=2), name="avg")
-        self.cp_last = self.cp_plot.plot(pen=pg.mkPen("c", width=1), name="last")
-        self.gp_last = self.gp_plot.plot(pen=pg.mkPen("c", width=1), name="last")
+        self.gp_plot.setXLink(self.cp_plot)
+        self.cp_curve = self.cp_plot.plot(pen=pg.mkPen("c", width=1), connect="finite")
+        self.gp_curve = self.gp_plot.plot(pen=pg.mkPen("c", width=1), connect="finite")
 
         self.progress = QProgressBar()
         self.status_label = QLabel("Idle.")
@@ -241,6 +236,9 @@ class MainWindow(QMainWindow):
         self.controls.save_btn.clicked.connect(self.save)
 
         self._segments: list[CtSegment] = []
+        self._timeline_t: list[np.ndarray] = []
+        self._timeline_cp: list[np.ndarray] = []
+        self._timeline_gp: list[np.ndarray] = []
         self._cfg: CtConfig | None = None
         self._thread: QThread | None = None
         self._worker: AcquisitionWorker | None = None
@@ -248,6 +246,11 @@ class MainWindow(QMainWindow):
     def start(self) -> None:
         self._cfg = self.controls.config()
         self._segments = []
+        self._timeline_t = []
+        self._timeline_cp = []
+        self._timeline_gp = []
+        self.cp_curve.setData([], [])
+        self.gp_curve.setData([], [])
         self.progress.setMaximum(self._cfg.pulse.n_pulses)
         self.progress.setValue(0)
         self.status_label.setText("Running…")
@@ -270,14 +273,26 @@ class MainWindow(QMainWindow):
             self._worker.stop()
 
     def _on_segment(self, seg: CtSegment) -> None:
+        assert self._cfg is not None
+        pulse_idx = len(self._segments)
         self._segments.append(seg)
-        self.cp_last.setData(seg.t, seg.cp)
-        self.gp_last.setData(seg.t, seg.gp)
-        if self.controls.show_average.isChecked() and len(self._segments) > 1:
-            cp_avg = np.mean([s.cp for s in self._segments], axis=0)
-            gp_avg = np.mean([s.gp for s in self._segments], axis=0)
-            self.cp_avg.setData(self._segments[0].t, cp_avg)
-            self.gp_avg.setData(self._segments[0].t, gp_avg)
+
+        # Place each segment on the timeline at pulse_idx * period. NaN gaps
+        # between segments make "no data was recorded here" visually obvious
+        # rather than connecting across the gap with a straight line.
+        t_abs = pulse_idx * self._cfg.pulse.period_s + seg.t
+        nan_gap = np.array([np.nan])
+        if self._timeline_t:
+            self._timeline_t.append(nan_gap)
+            self._timeline_cp.append(nan_gap)
+            self._timeline_gp.append(nan_gap)
+        self._timeline_t.append(t_abs)
+        self._timeline_cp.append(seg.cp)
+        self._timeline_gp.append(seg.gp)
+
+        t_all = np.concatenate(self._timeline_t)
+        self.cp_curve.setData(t_all, np.concatenate(self._timeline_cp))
+        self.gp_curve.setData(t_all, np.concatenate(self._timeline_gp))
         self.progress.setValue(len(self._segments))
 
     def _on_error(self, msg: str) -> None:

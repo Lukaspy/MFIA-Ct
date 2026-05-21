@@ -40,8 +40,9 @@ def test_save_run_roundtrip(tmp_path) -> None:
 
     with h5py.File(out, "r") as f:
         assert f.attrs["n_segments"] == 3
-        assert "average/cp" in f
         assert f["segments/0000/t"].shape == segments[0].t.shape
+        assert f["segments/0000"].attrs["pulse_index"] == 0
+        assert "segments/0002" in f
 
 
 def test_mock_baseline_is_dc_capacitance() -> None:
