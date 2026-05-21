@@ -17,7 +17,7 @@ import time
 from typing import Iterator, Protocol
 
 from .acquisition import StreamChunk
-from .config import CtConfig
+from .config import CtConfig, PulseSource
 
 
 class _Backend(Protocol):
@@ -25,7 +25,13 @@ class _Backend(Protocol):
 
     def configure_impedance(self, cfg: CtConfig) -> None: ...
     def set_aux_out(self, channel: int, value_v: float) -> None: ...
-    def start_continuous(self) -> None: ...
+    def start_continuous(
+        self,
+        *,
+        external_sync: bool = False,
+        sync_aux_in_channel: int = 0,
+        sync_threshold_v: float = 1.0,
+    ) -> None: ...
     def stop_continuous(self) -> None: ...
     def poll_continuous(self, length_s: float) -> StreamChunk | None: ...
 
@@ -49,7 +55,18 @@ class CtExperiment:
 
     def run(self) -> Iterator[StreamChunk]:
         self.backend.configure_impedance(self.cfg)
-        self.backend.start_continuous()
+        external = self.cfg.pulse.source == PulseSource.EXTERNAL
+        self.backend.start_continuous(
+            external_sync=external,
+            sync_aux_in_channel=self.cfg.pulse.sync_aux_in_channel,
+            sync_threshold_v=self.cfg.pulse.sync_threshold_v,
+        )
+        if external:
+            yield from self._run_external()
+        else:
+            yield from self._run_internal()
+
+    def _run_internal(self) -> Iterator[StreamChunk]:
         t_start = time.monotonic()
 
         ch = self.cfg.pulse.aux_out_channel
@@ -118,3 +135,28 @@ class CtExperiment:
                 self.backend.set_aux_out(ch, low_v)
             except Exception:
                 pass
+
+    def _run_external(self) -> Iterator[StreamChunk]:
+        """Polling-only loop. Pulse edges come from the backend's Aux In
+        threshold detector in each StreamChunk; we just collect them.
+        """
+        n = self.cfg.pulse.n_pulses
+        poll_interval = self.cfg.acq.poll_interval_s
+        drain_seconds = max(self.cfg.pulse.period_s, 1.0)
+        drain_until: float | None = None
+
+        try:
+            while not self._stop.is_set():
+                chunk = self.backend.poll_continuous(poll_interval)
+                if chunk is not None:
+                    if chunk.pulse_edges_s:
+                        self._pulse_times.extend(chunk.pulse_edges_s)
+                    yield chunk
+
+                if len(self._pulse_times) >= n:
+                    if drain_until is None:
+                        drain_until = time.monotonic() + drain_seconds
+                    elif time.monotonic() >= drain_until:
+                        break
+        finally:
+            self.backend.stop_continuous()

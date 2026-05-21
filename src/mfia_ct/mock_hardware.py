@@ -28,6 +28,8 @@ class MockMFIA:
         self._last_emitted_s: float = 0.0
         self._pulses: list[float] = []
         self._pulses_lock = threading.Lock()
+        self._external_sync: bool = False
+        self._next_external_pulse: int = 0
         # Device-physics constants for the synthetic transient.
         self._c_dc = 10e-12
         self._g_dc = 1e-9
@@ -67,9 +69,17 @@ class MockMFIA:
         return "/mock/imps/0/sample"
 
     # Continuous acquisition --------------------------------------------------
-    def start_continuous(self) -> None:
+    def start_continuous(
+        self,
+        *,
+        external_sync: bool = False,
+        sync_aux_in_channel: int = 0,
+        sync_threshold_v: float = 1.0,
+    ) -> None:
         self._t_zero_mono = time.monotonic()
         self._last_emitted_s = 0.0
+        self._external_sync = external_sync
+        self._next_external_pulse = 0
         with self._pulses_lock:
             self._pulses = []
 
@@ -90,11 +100,26 @@ class MockMFIA:
         n_new = int((now - self._last_emitted_s) * rate)
         if n_new <= 0:
             return None
+
+        # External-sync: fake the rising edges at the scheduled period so the
+        # GUI sees pulses arriving without anyone toggling Aux Out.
+        edges: list[float] = []
+        if self._external_sync:
+            period = self._cfg.pulse.period_s
+            n = self._cfg.pulse.n_pulses
+            while self._next_external_pulse < n:
+                t_pulse = self._next_external_pulse * period
+                if t_pulse > now:
+                    break
+                edges.append(t_pulse)
+                self.record_pulse(t_pulse)
+                self._next_external_pulse += 1
+
         dt = 1.0 / rate
         t = self._last_emitted_s + np.arange(1, n_new + 1) * dt
         cp, gp = self._synthesize(t)
         self._last_emitted_s = float(t[-1])
-        return StreamChunk(t=t, cp=cp, gp=gp)
+        return StreamChunk(t=t, cp=cp, gp=gp, pulse_edges_s=edges)
 
     def _synthesize(self, t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         assert self._cfg is not None

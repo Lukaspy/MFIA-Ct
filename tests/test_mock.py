@@ -5,7 +5,7 @@ from __future__ import annotations
 import h5py
 import numpy as np
 
-from mfia_ct.config import CtConfig
+from mfia_ct.config import CtConfig, PulseSource
 from mfia_ct.experiment import CtExperiment
 from mfia_ct.mock_hardware import MockMFIA
 from mfia_ct.storage import save_run
@@ -54,6 +54,20 @@ def test_pulse_times_match_period() -> None:
     # Inter-pulse spacing should be close to period_s (allow software jitter).
     diffs = np.diff(times)
     assert np.allclose(diffs, cfg.pulse.period_s, atol=0.02)
+
+
+def test_external_sync_collects_edges_from_chunks() -> None:
+    cfg = _fast_cfg(n_pulses=4)
+    cfg.pulse.source = PulseSource.EXTERNAL
+    exp = CtExperiment(MockMFIA(), cfg)
+    chunks = list(exp.run())
+
+    edges = [e for c in chunks for e in c.pulse_edges_s]
+    assert len(edges) == cfg.pulse.n_pulses
+    assert edges == exp.pulse_times
+    # External-sync edges are scheduled at exactly i * period in the mock.
+    expected = [i * cfg.pulse.period_s for i in range(cfg.pulse.n_pulses)]
+    assert np.allclose(edges, expected)
 
 
 def test_save_run_roundtrip(tmp_path) -> None:

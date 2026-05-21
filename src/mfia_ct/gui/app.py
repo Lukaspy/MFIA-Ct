@@ -37,6 +37,7 @@ from ..config import (
     EquivCircuit,
     IASettings,
     PulseSettings,
+    PulseSource,
 )
 from ..experiment import CtExperiment
 from ..storage import save_run
@@ -128,6 +129,9 @@ class ControlPanel(QWidget):
         # Pulse group
         pulse = QGroupBox("Optical pulse")
         pulse_form = QFormLayout(pulse)
+        self.pulse_source = QComboBox()
+        for s in PulseSource:
+            self.pulse_source.addItem(s.value, userData=s)
         self.aux_ch = QComboBox()
         for i in range(4):
             self.aux_ch.addItem(f"Aux Out {i + 1}", userData=i)
@@ -136,13 +140,26 @@ class ControlPanel(QWidget):
         self.pulse_width = _spin(0.010, 1e-6, 10.0, 0.001, decimals=6)
         self.period = _spin(1.0, 0.001, 60.0, 0.1, decimals=4)
         self.n_pulses = _int_spin(20, 1, 100_000)
+        self.sync_in_ch = QComboBox()
+        for i in range(2):
+            self.sync_in_ch.addItem(f"Aux In {i + 1}", userData=i)
+        self.sync_threshold = _spin(1.0, -10.0, 10.0, 0.1, decimals=3)
+        pulse_form.addRow("Pulse source", self.pulse_source)
         pulse_form.addRow("Aux Out channel", self.aux_ch)
         pulse_form.addRow("High (V)", self.high_v)
         pulse_form.addRow("Low (V)", self.low_v)
         pulse_form.addRow("Pulse width (s)", self.pulse_width)
+        pulse_form.addRow("Sync input", self.sync_in_ch)
+        pulse_form.addRow("Sync threshold (V)", self.sync_threshold)
         pulse_form.addRow("Period (s)", self.period)
         pulse_form.addRow("# pulses", self.n_pulses)
         layout.addWidget(pulse)
+
+        # Track which rows are internal/external-only so we can grey them out.
+        self._internal_only = [self.aux_ch, self.high_v, self.low_v, self.pulse_width]
+        self._external_only = [self.sync_in_ch, self.sync_threshold]
+        self.pulse_source.currentIndexChanged.connect(self._update_pulse_mode_widgets)
+        self._update_pulse_mode_widgets()
 
         # Acquisition group
         acq = QGroupBox("Acquisition")
@@ -164,6 +181,13 @@ class ControlPanel(QWidget):
         layout.addLayout(btns)
         layout.addStretch()
 
+    def _update_pulse_mode_widgets(self) -> None:
+        is_internal = self.pulse_source.currentData() == PulseSource.INTERNAL
+        for w in self._internal_only:
+            w.setEnabled(is_internal)
+        for w in self._external_only:
+            w.setEnabled(not is_internal)
+
     def config(self) -> CtConfig:
         return CtConfig(
             ia=IASettings(
@@ -178,12 +202,15 @@ class ControlPanel(QWidget):
                 sample_rate_hz=self.demod_rate.value(),
             ),
             pulse=PulseSettings(
+                source=self.pulse_source.currentData(),
                 aux_out_channel=self.aux_ch.currentData(),
                 high_v=self.high_v.value(),
                 low_v=self.low_v.value(),
                 pulse_width_s=self.pulse_width.value(),
                 period_s=self.period.value(),
                 n_pulses=self.n_pulses.value(),
+                sync_aux_in_channel=self.sync_in_ch.currentData(),
+                sync_threshold_v=self.sync_threshold.value(),
             ),
             acq=AcquisitionSettings(poll_interval_s=self.poll_interval.value()),
         )

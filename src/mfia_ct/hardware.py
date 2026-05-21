@@ -40,6 +40,10 @@ class MFIA:
         self._t_zero_ticks: Optional[int] = None
         self._clockbase_cached: float = 0.0
         self._subscribed: bool = False
+        self._demod_sample_path: str = ""
+        self._auxin_field: str = ""
+        self._auxin_threshold: float = 0.0
+        self._auxin_last_state: bool = False
 
     def connect(self) -> None:
         """Open a session against the LabOne data server and attach the device.
@@ -141,7 +145,18 @@ class MFIA:
 
     # --- Continuous acquisition ----------------------------------------------
 
-    def start_continuous(self) -> None:
+    def start_continuous(
+        self,
+        *,
+        external_sync: bool = False,
+        sync_aux_in_channel: int = 0,
+        sync_threshold_v: float = 1.0,
+    ) -> None:
+        """Subscribe to the IA sample node so ``poll_continuous`` can stream.
+
+        When ``external_sync`` is true also subscribe to the demod sample to
+        read the Aux In channel; pulse edges are detected in the poll loop.
+        """
         if self.daq is None:
             raise RuntimeError("MFIA.connect() must be called first")
         self._t_zero_ticks = None
@@ -151,6 +166,15 @@ class MFIA:
         import time as _time
         _time.sleep(0.1)
         self.daq.subscribe(self.imps_sample_path)
+        if external_sync:
+            self._demod_sample_path = f"/{self.device}/demods/0/sample"
+            self._auxin_field = f"auxin{sync_aux_in_channel}"
+            self._auxin_threshold = sync_threshold_v
+            self._auxin_last_state = False
+            self.daq.subscribe(self._demod_sample_path)
+        else:
+            self._demod_sample_path = ""
+            self._auxin_field = ""
         self._subscribed = True
 
     def stop_continuous(self) -> None:
@@ -159,7 +183,13 @@ class MFIA:
                 self.daq.unsubscribe(self.imps_sample_path)
             except Exception:
                 pass
+            if self._demod_sample_path:
+                try:
+                    self.daq.unsubscribe(self._demod_sample_path)
+                except Exception:
+                    pass
         self._subscribed = False
+        self._demod_sample_path = ""
 
     def poll_continuous(self, length_s: float, timeout_ms: int = 500) -> Optional[StreamChunk]:
         """Pull whatever IA samples have accumulated since the last poll."""
@@ -177,4 +207,32 @@ class MFIA:
         t = (ts - self._t_zero_ticks) / self._clockbase_cached
         cp = np.asarray(sample["param1"], dtype=float)
         gp = np.asarray(sample["param0"], dtype=float)
-        return StreamChunk(t=t, cp=cp, gp=gp)
+
+        edges = self._detect_aux_in_edges(data)
+        return StreamChunk(t=t, cp=cp, gp=gp, pulse_edges_s=edges)
+
+    def _detect_aux_in_edges(self, data: dict) -> list[float]:
+        """Find low→high crossings of ``auxin_threshold`` in the demod stream."""
+        if not self._demod_sample_path or self._demod_sample_path not in data:
+            return []
+        sample = data[self._demod_sample_path]
+        if self._auxin_field not in sample:
+            return []
+        values = np.asarray(sample[self._auxin_field], dtype=float)
+        ts = np.asarray(sample["timestamp"])
+        if values.size == 0:
+            return []
+
+        above = values > self._auxin_threshold
+        edges_ticks: list[int] = []
+        if not self._auxin_last_state and above[0]:
+            edges_ticks.append(int(ts[0]))
+        if above.size > 1:
+            rising = (~above[:-1]) & above[1:]
+            for idx in np.where(rising)[0]:
+                edges_ticks.append(int(ts[idx + 1]))
+        self._auxin_last_state = bool(above[-1])
+
+        if self._t_zero_ticks is None:
+            return []
+        return [(tk - self._t_zero_ticks) / self._clockbase_cached for tk in edges_ticks]

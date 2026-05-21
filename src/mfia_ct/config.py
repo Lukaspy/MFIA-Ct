@@ -18,6 +18,21 @@ class EquivCircuit(str, Enum):
     CS_RS = "Cs-Rs"
 
 
+class PulseSource(str, Enum):
+    """Who paces the optical pulse train.
+
+    INTERNAL: MFIA software-toggles its own Aux Out as the pulse signal.
+        Convenient but limited to ~ms pulse-timing precision by API round trips.
+    EXTERNAL: an external pulse driver (function generator, laser TTL sync)
+        drives the LED. Its sync line goes into an MFIA Aux In; the host
+        detects rising edges in software at the demod rate, so timing is
+        sub-µs accurate. Aux Out is unused in this mode.
+    """
+
+    INTERNAL = "Internal (MFIA Aux Out)"
+    EXTERNAL = "External (Aux In sync)"
+
+
 @dataclass
 class IASettings:
     frequency_hz: float = 100_000.0
@@ -36,14 +51,20 @@ class DemodSettings:
 
 @dataclass
 class PulseSettings:
-    """Optical pulse parameters; drives Aux Out N as a software-paced square wave."""
+    """Optical pulse parameters."""
 
+    source: PulseSource = PulseSource.INTERNAL
+    # Internal mode — MFIA drives Aux Out as a software-paced square wave.
     aux_out_channel: int = 0
     high_v: float = 5.0
     low_v: float = 0.0
     pulse_width_s: float = 0.010
+    # Common
     period_s: float = 1.0
     n_pulses: int = 100
+    # External mode — MFIA reads sync TTL from Aux In and detects edges.
+    sync_aux_in_channel: int = 0  # 0 = Aux In 1, 1 = Aux In 2 (API 0-indexed)
+    sync_threshold_v: float = 1.0
 
 
 @dataclass
