@@ -17,11 +17,18 @@ from .config import CtConfig, TriggerSource
 
 @dataclass
 class CtSegment:
-    """One trigger's worth of data, time-aligned to the trigger edge at t=0."""
+    """One trigger's worth of data, time-aligned to the trigger edge at t=0.
+
+    ``t0_s`` is the wall-clock time of this pulse relative to the start of
+    the experiment, recorded by the host when the trigger fired. Combined
+    with ``t``, the absolute time of sample j in the experiment is
+    ``t0_s + t[j]``.
+    """
 
     t: np.ndarray
     cp: np.ndarray
     gp: np.ndarray
+    t0_s: float = 0.0
 
 
 class CtAcquisition:

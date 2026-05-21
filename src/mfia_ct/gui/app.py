@@ -274,13 +274,13 @@ class MainWindow(QMainWindow):
 
     def _on_segment(self, seg: CtSegment) -> None:
         assert self._cfg is not None
-        pulse_idx = len(self._segments)
         self._segments.append(seg)
 
-        # Place each segment on the timeline at pulse_idx * period. NaN gaps
-        # between segments make "no data was recorded here" visually obvious
-        # rather than connecting across the gap with a straight line.
-        t_abs = pulse_idx * self._cfg.pulse.period_s + seg.t
+        # Place each segment on the timeline at its measured t0_s (recorded
+        # when the trigger fired). NaN gaps between segments make "no data
+        # was recorded here" visually obvious rather than connecting across
+        # the gap with a straight line.
+        t_abs = seg.t0_s + seg.t
         nan_gap = np.array([np.nan])
         if self._timeline_t:
             self._timeline_t.append(nan_gap)

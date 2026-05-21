@@ -39,6 +39,7 @@ def save_run(
         for i, seg in enumerate(segments):
             sg = grp.create_group(f"{i:04d}")
             sg.attrs["pulse_index"] = i
+            sg.attrs["t0_s"] = seg.t0_s
             sg.create_dataset("t", data=seg.t, compression="gzip")
             sg.create_dataset("cp", data=seg.cp, compression="gzip")
             sg.create_dataset("gp", data=seg.gp, compression="gzip")

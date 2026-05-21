@@ -26,6 +26,11 @@ class CtExperiment:
     def __init__(self, backend: _Backend, cfg: CtConfig) -> None:
         self.backend = backend
         self.cfg = cfg
+        self._t_start: float = 0.0
+
+    def _now(self) -> float:
+        """Seconds since the start of this run."""
+        return time.monotonic() - self._t_start
 
     def run(self) -> Iterator[CtSegment]:
         """Yield one CtSegment per pulse.
@@ -35,6 +40,7 @@ class CtExperiment:
         For the mock backend it yields synthetic traces directly.
         """
         self.backend.configure_impedance(self.cfg)
+        self._t_start = time.monotonic()
 
         if isinstance(self.backend, MockMFIA):
             yield from self._run_mock()
@@ -45,10 +51,14 @@ class CtExperiment:
         from .mock_hardware import MockMFIA
 
         backend: MockMFIA = self.backend  # type: ignore[assignment]
-        for _ in range(self.cfg.pulse.n_pulses):
+        for i in range(self.cfg.pulse.n_pulses):
             t, cp, gp = backend.generate_trace()
-            yield CtSegment(t=t, cp=cp, gp=gp)
-            time.sleep(self.cfg.pulse.period_s * 0.02)  # keep GUI responsive
+            # Mock pacing: simulate the period_s pulse spacing.
+            target = i * self.cfg.pulse.period_s
+            wait = target - self._now()
+            if wait > 0:
+                time.sleep(wait)
+            yield CtSegment(t=t, cp=cp, gp=gp, t0_s=self._now())
 
     def _run_hardware(self) -> Iterator[CtSegment]:
         if self.cfg.acq.trigger_source == TriggerSource.SOFTWARE:
@@ -79,6 +89,7 @@ class CtExperiment:
                 self.backend.set_aux_out(pulse.aux_out_channel, pulse.high_v)
                 acq.force_trigger()
                 t_pulse_start = time.monotonic()
+                t0_s = self._now()  # actual time of this pulse
                 time.sleep(pulse.pulse_width_s)
                 self.backend.set_aux_out(pulse.aux_out_channel, pulse.low_v)
 
@@ -88,6 +99,7 @@ class CtExperiment:
                     time.sleep(0.02)
 
                 for seg in acq.read():
+                    seg.t0_s = t0_s
                     yield seg
                 acq.stop()
 
@@ -108,22 +120,28 @@ class CtExperiment:
             self.backend.set_aux_out(pulse.aux_out_channel, pulse.low_v)
             time.sleep(0.05)
 
+            pulse_times: list[float] = []
             emitted = 0
             for _ in range(pulse.n_pulses):
                 if acq.is_finished():
                     break
                 self.backend.set_aux_out(pulse.aux_out_channel, pulse.high_v)
+                pulse_times.append(self._now())
                 time.sleep(pulse.pulse_width_s)
                 self.backend.set_aux_out(pulse.aux_out_channel, pulse.low_v)
                 time.sleep(max(0.0, pulse.period_s - pulse.pulse_width_s))
 
                 segments = acq.read()
-                for seg in segments[emitted:]:
+                for idx, seg in enumerate(segments[emitted:], start=emitted):
+                    if idx < len(pulse_times):
+                        seg.t0_s = pulse_times[idx]
                     yield seg
                 emitted = len(segments)
 
             time.sleep(self.cfg.acq.duration_s)
-            for seg in acq.read()[emitted:]:
+            for idx, seg in enumerate(acq.read()[emitted:], start=emitted):
+                if idx < len(pulse_times):
+                    seg.t0_s = pulse_times[idx]
                 yield seg
         finally:
             acq.stop()

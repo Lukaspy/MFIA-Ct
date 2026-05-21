@@ -26,12 +26,18 @@ def test_mock_yields_n_segments() -> None:
         assert np.isfinite(seg.cp).all()
         assert np.isfinite(seg.gp).all()
 
+    # t0_s should be monotonically non-decreasing across pulses.
+    t0s = [s.t0_s for s in segments]
+    assert t0s == sorted(t0s)
+    assert t0s[0] >= 0.0
+
 
 def test_save_run_roundtrip(tmp_path) -> None:
     import h5py
 
     cfg = CtConfig()
     cfg.pulse.n_pulses = 3
+    cfg.pulse.period_s = 0.001
     cfg.acq.duration_s = 0.02
     backend = MockMFIA()
     segments = list(CtExperiment(backend, cfg).run())
@@ -49,6 +55,7 @@ def test_mock_baseline_is_dc_capacitance() -> None:
     """Mean Cp before t=0 should sit near the configured 10 pF baseline."""
     cfg = CtConfig()
     cfg.pulse.n_pulses = 1
+    cfg.pulse.period_s = 0.001
     cfg.acq.duration_s = 0.05
     cfg.acq.pre_trigger_s = 0.01
 
