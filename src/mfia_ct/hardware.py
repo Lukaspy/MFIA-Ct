@@ -99,11 +99,15 @@ class MFIA:
         ia = cfg.ia
         model = _EQUIV_CIRCUIT_NODE_VALUE[ia.equiv_circuit]
 
+        # auto/output and auto/bw left OFF: both recalibrate periodically in
+        # the background and cause demod-stream gaps. The user's amplitude and
+        # demod time-constant settings are used as-is.
         settings = [
             (f"/{dev}/imps/{ia.imp_index}/enable", 1),
             (f"/{dev}/imps/{ia.imp_index}/mode", 0),
-            (f"/{dev}/imps/{ia.imp_index}/auto/output", 1),
+            (f"/{dev}/imps/{ia.imp_index}/auto/output", 0),
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 0),
+            (f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 0),
             (f"/{dev}/imps/{ia.imp_index}/freq", ia.frequency_hz),
             (f"/{dev}/imps/{ia.imp_index}/output/amplitude", ia.ac_amplitude_v),
             (f"/{dev}/imps/{ia.imp_index}/bias/value", ia.dc_bias_v),
@@ -141,7 +145,11 @@ class MFIA:
         if self.daq is None:
             raise RuntimeError("MFIA.connect() must be called first")
         self._t_zero_ticks = None
-        self._ = self.clockbase()  # warm cache
+        self.clockbase()  # warm cache
+        # Brief settle so the demod filter's initial transient (after the
+        # configure_impedance writes) doesn't end up in the recorded stream.
+        import time as _time
+        _time.sleep(0.1)
         self.daq.subscribe(self.imps_sample_path)
         self._subscribed = True
 

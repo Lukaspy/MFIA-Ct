@@ -134,7 +134,7 @@ class ControlPanel(QWidget):
         self.high_v = _spin(5.0, 0.0, 10.0, 0.1, decimals=2)
         self.low_v = _spin(0.0, -10.0, 10.0, 0.1, decimals=2)
         self.pulse_width = _spin(0.010, 1e-6, 10.0, 0.001, decimals=6)
-        self.period = _spin(1.0, 0.01, 60.0, 0.1, decimals=3)
+        self.period = _spin(1.0, 0.001, 60.0, 0.1, decimals=4)
         self.n_pulses = _int_spin(20, 1, 100_000)
         pulse_form.addRow("Aux Out channel", self.aux_ch)
         pulse_form.addRow("High (V)", self.high_v)
@@ -147,7 +147,7 @@ class ControlPanel(QWidget):
         # Acquisition group
         acq = QGroupBox("Acquisition")
         acq_form = QFormLayout(acq)
-        self.poll_interval = _spin(0.05, 0.005, 1.0, 0.01, decimals=4)
+        self.poll_interval = _spin(0.05, 0.001, 1.0, 0.01, decimals=4)
         acq_form.addRow("Poll interval (s)", self.poll_interval)
         layout.addWidget(acq)
 
