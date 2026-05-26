@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-hardware = ["zhinst>=23.06"]
+hardware = ["zhinst>=23.06", "pyvisa>=1.13"]
 dev = ["pytest>=7", "pytest-qt>=4.4"]
 
 [project.scripts]

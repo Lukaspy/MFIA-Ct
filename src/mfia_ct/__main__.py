@@ -1,9 +1,13 @@
 """CLI entry point.
 
+Instrument selection is done inside the GUI; all flags here are just
+pre-fills for the "Instrument" panel.
+
 Usage:
-    mfia-ct --mock                       # synthetic backend, no MFIA needed
-    mfia-ct --device DEV3000             # real MFIA via local LabOne data server
-    mfia-ct --device DEV3000 --host 1.2.3.4 --port 8004
+    mfia-ct                              # blank GUI; pick instrument inside
+    mfia-ct --mock                       # pre-select mock backend
+    mfia-ct --device dev32369            # pre-fill MFIA device id
+    mfia-ct --device dev32369 --host 1.2.3.4 --port 8004
 """
 
 from __future__ import annotations
@@ -14,30 +18,20 @@ import sys
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mfia-ct", description=__doc__)
-    src = parser.add_mutually_exclusive_group(required=True)
-    src.add_argument("--mock", action="store_true", help="Run with synthetic backend.")
-    src.add_argument("--device", help="MFIA device id, e.g. DEV3000.")
-    parser.add_argument("--host", default="localhost", help="LabOne data server host.")
-    parser.add_argument("--port", type=int, default=8004, help="LabOne data server port.")
+    parser.add_argument("--mock", action="store_true", help="Pre-select mock backend.")
+    parser.add_argument("--device", help="Pre-fill MFIA device id, e.g. dev32369.")
+    parser.add_argument("--host", default=None, help="Pre-fill LabOne data server host.")
+    parser.add_argument("--port", type=int, default=None, help="Pre-fill LabOne port.")
     args = parser.parse_args(argv)
 
-    if args.mock:
-        from .mock_hardware import MockMFIA
+    from .gui.app import run
 
-        backend = MockMFIA()
-    else:
-        from .hardware import MFIA
-
-        backend = MFIA(args.device, server_host=args.host, server_port=args.port)
-        backend.connect()
-
-    try:
-        from .gui.app import run
-
-        return run(backend)
-    finally:
-        if hasattr(backend, "disconnect"):
-            backend.disconnect()
+    return run(
+        preselect_mock=args.mock,
+        preselect_device=args.device,
+        preselect_host=args.host,
+        preselect_port=args.port,
+    )
 
 
 if __name__ == "__main__":

@@ -36,13 +36,37 @@ class _Backend(Protocol):
     def poll_continuous(self, length_s: float) -> StreamChunk | None: ...
 
 
+class _FunctionGenerator(Protocol):
+    def connect(self) -> None: ...
+    def disconnect(self) -> None: ...
+    def reset(self) -> None: ...
+    def configure_pulse_burst(
+        self,
+        *,
+        freq_hz: float,
+        width_s: float,
+        n_cycles: int,
+        high_v: float,
+        low_v: float,
+        load_ohms: str,
+    ) -> None: ...
+    def trigger(self) -> None: ...
+    def disarm(self) -> None: ...
+
+
 _MIN_POLL_S = 0.001
 
 
 class CtExperiment:
-    def __init__(self, backend: _Backend, cfg: CtConfig) -> None:
+    def __init__(
+        self,
+        backend: _Backend,
+        cfg: CtConfig,
+        fg: _FunctionGenerator | None = None,
+    ) -> None:
         self.backend = backend
         self.cfg = cfg
+        self.fg = fg
         self._stop = threading.Event()
         self._pulse_times: list[float] = []
 
@@ -139,13 +163,36 @@ class CtExperiment:
     def _run_external(self) -> Iterator[StreamChunk]:
         """Polling-only loop. Pulse edges come from the backend's Aux In
         threshold detector in each StreamChunk; we just collect them.
+
+        If a function generator is attached and ``cfg.fg.enabled`` is true,
+        configure and trigger it here — by this point the MFIA is already
+        subscribed (``start_continuous`` was called in ``run``), so the first
+        rising edge won't be missed.
         """
         n = self.cfg.pulse.n_pulses
         poll_interval = self.cfg.acq.poll_interval_s
         drain_seconds = max(self.cfg.pulse.period_s, 1.0)
         drain_until: float | None = None
 
+        fg_active = self.fg is not None and self.cfg.fg.enabled
+        fg_connected = False
+        fg_armed = False
         try:
+            if fg_active:
+                self.fg.connect()
+                fg_connected = True
+                self.fg.reset()
+                self.fg.configure_pulse_burst(
+                    freq_hz=1.0 / self.cfg.pulse.period_s,
+                    width_s=self.cfg.pulse.pulse_width_s,
+                    n_cycles=self.cfg.pulse.n_pulses,
+                    high_v=self.cfg.fg.high_v,
+                    low_v=self.cfg.fg.low_v,
+                    load_ohms=self.cfg.fg.load_ohms,
+                )
+                fg_armed = True
+                self.fg.trigger()
+
             while not self._stop.is_set():
                 chunk = self.backend.poll_continuous(poll_interval)
                 if chunk is not None:
@@ -160,3 +207,13 @@ class CtExperiment:
                         break
         finally:
             self.backend.stop_continuous()
+            if fg_armed and self.fg is not None:
+                try:
+                    self.fg.disarm()
+                except Exception:
+                    pass
+            if fg_connected and self.fg is not None:
+                try:
+                    self.fg.disconnect()
+                except Exception:
+                    pass

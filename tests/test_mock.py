@@ -7,6 +7,7 @@ import numpy as np
 
 from mfia_ct.config import CtConfig, PulseSource
 from mfia_ct.experiment import CtExperiment
+from mfia_ct.mock_fg import MockFunctionGenerator
 from mfia_ct.mock_hardware import MockMFIA
 from mfia_ct.storage import save_run
 
@@ -68,6 +69,45 @@ def test_external_sync_collects_edges_from_chunks() -> None:
     # External-sync edges are scheduled at exactly i * period in the mock.
     expected = [i * cfg.pulse.period_s for i in range(cfg.pulse.n_pulses)]
     assert np.allclose(edges, expected)
+
+
+def test_fg_call_sequence_in_external_mode() -> None:
+    cfg = _fast_cfg(n_pulses=3)
+    cfg.pulse.source = PulseSource.EXTERNAL
+    cfg.fg.enabled = True
+    cfg.fg.high_v = 4.0
+    cfg.fg.low_v = 0.0
+    cfg.fg.load_ohms = "INF"
+
+    fg = MockFunctionGenerator()
+    exp = CtExperiment(MockMFIA(), cfg, fg=fg)
+    list(exp.run())
+
+    names = [c.name for c in fg.calls]
+    assert names[:4] == ["connect", "reset", "configure_pulse_burst", "trigger"]
+    assert names[-2:] == ["disarm", "disconnect"]
+    assert fg.trigger_count == 1
+
+    sent = fg.last_config
+    assert sent is not None
+    assert sent["freq_hz"] == 1.0 / cfg.pulse.period_s
+    assert sent["width_s"] == cfg.pulse.pulse_width_s
+    assert sent["n_cycles"] == cfg.pulse.n_pulses
+    assert sent["high_v"] == cfg.fg.high_v
+    assert sent["load_ohms"] == cfg.fg.load_ohms
+
+
+def test_fg_skipped_when_disabled() -> None:
+    cfg = _fast_cfg(n_pulses=2)
+    cfg.pulse.source = PulseSource.EXTERNAL
+    cfg.fg.enabled = False
+
+    fg = MockFunctionGenerator()
+    exp = CtExperiment(MockMFIA(), cfg, fg=fg)
+    list(exp.run())
+
+    # FG was passed in but not enabled → nothing should have been written.
+    assert fg.calls == []
 
 
 def test_save_run_roundtrip(tmp_path) -> None:

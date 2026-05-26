@@ -75,11 +75,29 @@ class AcquisitionSettings:
 
 
 @dataclass
+class FunctionGeneratorSettings:
+    """Optional external pulse driver (Agilent 33250A over GPIB).
+
+    Only consulted in EXTERNAL pulse mode. When ``enabled`` is true the
+    experiment configures the FG for a triggered pulse burst, arms it, and
+    fires ``*TRG`` once the MFIA is subscribed. Pulse width / count / period
+    come from ``PulseSettings`` so there's a single source of truth.
+    """
+
+    enabled: bool = False
+    resource: str = "GPIB0::10::INSTR"
+    high_v: float = 5.0
+    low_v: float = 0.0
+    load_ohms: str = "INF"  # "INF" for high-Z LED driver inputs, "50" for 50 Ω
+
+
+@dataclass
 class CtConfig:
     ia: IASettings = field(default_factory=IASettings)
     demod: DemodSettings = field(default_factory=DemodSettings)
     pulse: PulseSettings = field(default_factory=PulseSettings)
     acq: AcquisitionSettings = field(default_factory=AcquisitionSettings)
+    fg: FunctionGeneratorSettings = field(default_factory=FunctionGeneratorSettings)
     notes: str = ""
 
     def to_dict(self) -> dict:
