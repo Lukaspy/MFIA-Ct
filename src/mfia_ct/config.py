@@ -18,6 +18,32 @@ class EquivCircuit(str, Enum):
     CS_RS = "Cs-Rs"
 
 
+class TerminalMode(str, Enum):
+    """MFIA impedance measurement terminal configuration (/imps/n/mode).
+
+    FOUR_TERMINAL: uses current + voltage drop across the DUT; excludes
+        series-resistance influences. Best for LOW impedance. The DC bias
+        rides on the device's common-mode input range, so it is limited
+        to ±3 V on the MFIA.
+    TWO_TERMINAL: uses the driving voltage + measured current. Best for
+        HIGH impedance (voltage-measurement parasitics otherwise limit the
+        frequency range). DC bias can reach ±10 V since the voltage inputs
+        are not connected.
+    """
+
+    FOUR_TERMINAL = "4-terminal"
+    TWO_TERMINAL = "2-terminal"
+
+
+# Max DC bias the MFIA allows in each terminal mode (volts, ±). The 4-terminal
+# limit is set by the common-mode input range; 2-terminal is the full source
+# range. From the MFIA user manual specifications table.
+TERMINAL_BIAS_LIMIT_V = {
+    TerminalMode.FOUR_TERMINAL: 3.0,
+    TerminalMode.TWO_TERMINAL: 10.0,
+}
+
+
 class PulseSource(str, Enum):
     """Who paces the optical pulse train.
 
@@ -39,6 +65,7 @@ class IASettings:
     ac_amplitude_v: float = 0.05
     dc_bias_v: float = 0.0
     equiv_circuit: EquivCircuit = EquivCircuit.CP_RP
+    terminal_mode: TerminalMode = TerminalMode.FOUR_TERMINAL
     imp_index: int = 0
 
 

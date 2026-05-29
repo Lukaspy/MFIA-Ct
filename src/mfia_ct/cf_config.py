@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Optional
 
-from .config import EquivCircuit, IASettings
+from .config import EquivCircuit, IASettings, TerminalMode
 
 
 class AmplitudeUnit(str, Enum):
@@ -182,6 +182,12 @@ class CfConfig:
         ac_amplitude_v=0.030,  # 30 mV RMS — matches B1500 reference
         dc_bias_v=0.0,
         equiv_circuit=EquivCircuit.CP_RP,
+        # 2-terminal by default for the C-f campaign: the devices are
+        # high-impedance at low frequency (slow arc ≥ MΩ), and 2-terminal
+        # allows the full ±10 V bias range the ±5 V matrix needs. 4-terminal
+        # would cap bias at ±3 V. Confirm this matches the B1500 reference
+        # contact config before trusting the 1–300 kHz stitch.
+        terminal_mode=TerminalMode.TWO_TERMINAL,
         imp_index=0,
     ))
     amplitude_unit: AmplitudeUnit = AmplitudeUnit.VRMS

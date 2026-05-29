@@ -16,13 +16,20 @@ import numpy as np
 
 from .acquisition import StreamChunk
 from .cf_config import CfConfig, SweeperSettings
-from .config import CtConfig, EquivCircuit
+from .config import CtConfig, EquivCircuit, TerminalMode
 
 # Equivalent-circuit selectors as exposed by /dev/imps/N/model.
 # 0 = R+C series, 1 = R||C parallel. Match the LabOne IA tab.
 _EQUIV_CIRCUIT_NODE_VALUE = {
     EquivCircuit.CP_RP: 1,
     EquivCircuit.CS_RS: 0,
+}
+
+# Terminal-mode selector as exposed by /dev/imps/N/mode.
+# 0 = 4 Terminal, 1 = 2 Terminal (per the MFIA user manual node reference).
+_TERMINAL_MODE_NODE_VALUE = {
+    TerminalMode.FOUR_TERMINAL: 0,
+    TerminalMode.TWO_TERMINAL: 1,
 }
 
 
@@ -111,7 +118,7 @@ class MFIA:
         # demod time-constant settings are used as-is.
         settings = [
             (f"/{dev}/imps/{ia.imp_index}/enable", 1),
-            (f"/{dev}/imps/{ia.imp_index}/mode", 0),
+            (f"/{dev}/imps/{ia.imp_index}/mode", _TERMINAL_MODE_NODE_VALUE[ia.terminal_mode]),
             (f"/{dev}/imps/{ia.imp_index}/auto/output", 0),
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 0),
             (f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 0),
@@ -147,7 +154,7 @@ class MFIA:
 
         settings = [
             (f"/{dev}/imps/{ia.imp_index}/enable", 1),
-            (f"/{dev}/imps/{ia.imp_index}/mode", 0),
+            (f"/{dev}/imps/{ia.imp_index}/mode", _TERMINAL_MODE_NODE_VALUE[ia.terminal_mode]),
             (f"/{dev}/imps/{ia.imp_index}/auto/output", 0),
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 1),  # sweeper expects auto-BW on
             (f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 1),

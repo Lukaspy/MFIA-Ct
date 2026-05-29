@@ -37,6 +37,7 @@ from mfia_ct.cf_storage import (
     make_metadata_from_config,
     write_sweep_csv,
 )
+from mfia_ct.config import TERMINAL_BIAS_LIMIT_V, TerminalMode
 from mfia_ct.led_source import MightexStub, MockLedSource
 from mfia_ct.mock_hardware import MockMFIA
 
@@ -212,6 +213,23 @@ def test_default_illumination_sequence_interleaves_dark() -> None:
             assert "nm" in lbl
         else:
             assert lbl.startswith("dark_post_")
+
+
+def test_cf_default_is_two_terminal() -> None:
+    cfg = CfConfig()
+    assert cfg.ia.terminal_mode == TerminalMode.TWO_TERMINAL
+
+
+def test_terminal_bias_limits() -> None:
+    # 4-terminal is the restrictive one; 2-terminal allows the ±5 V matrix.
+    assert TERMINAL_BIAS_LIMIT_V[TerminalMode.FOUR_TERMINAL] == 3.0
+    assert TERMINAL_BIAS_LIMIT_V[TerminalMode.TWO_TERMINAL] == 10.0
+    matrix = [-5.0, -4.0, -2.0, -1.0, 0.0, 1.0, 2.0, 4.0, 5.0]
+    four = TERMINAL_BIAS_LIMIT_V[TerminalMode.FOUR_TERMINAL]
+    two = TERMINAL_BIAS_LIMIT_V[TerminalMode.TWO_TERMINAL]
+    # ±4 and ±5 exceed the 4-terminal limit but fit 2-terminal.
+    assert [b for b in matrix if abs(b) > four] == [-5.0, -4.0, 4.0, 5.0]
+    assert [b for b in matrix if abs(b) > two] == []
 
 
 def test_progress_callback_fires_with_indices() -> None:

@@ -43,6 +43,7 @@ from ..config import (
     IASettings,
     PulseSettings,
     PulseSource,
+    TerminalMode,
 )
 from ..experiment import CtExperiment
 from ..storage import save_run
@@ -118,10 +119,16 @@ class ControlPanel(QWidget):
         self.dc_bias = _spin(0.0, -10.0, 10.0, 0.1, decimals=3)
         self.equiv = QComboBox()
         self.equiv.addItems([e.value for e in EquivCircuit])
+        self.terminal_mode = QComboBox()
+        for tm in TerminalMode:
+            self.terminal_mode.addItem(tm.value, userData=tm)
+        # C-t default: 4-terminal (unchanged from the original behavior).
+        self.terminal_mode.setCurrentText(TerminalMode.FOUR_TERMINAL.value)
         ia_form.addRow("Test frequency (Hz)", self.freq)
         ia_form.addRow("AC amplitude (V rms)", self.ac_amp)
         ia_form.addRow("DC bias (V)", self.dc_bias)
         ia_form.addRow("Equivalent circuit", self.equiv)
+        ia_form.addRow("Terminal mode", self.terminal_mode)
         layout.addWidget(ia)
 
         # Demod group
@@ -247,6 +254,7 @@ class ControlPanel(QWidget):
                 ac_amplitude_v=self.ac_amp.value(),
                 dc_bias_v=self.dc_bias.value(),
                 equiv_circuit=EquivCircuit(self.equiv.currentText()),
+                terminal_mode=self.terminal_mode.currentData(),
             ),
             demod=DemodSettings(
                 time_constant_s=self.tc.value(),

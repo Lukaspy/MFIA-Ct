@@ -64,7 +64,12 @@ from ..cf_config import (
 )
 from ..cf_experiment import CfExperiment
 from ..cf_storage import SweepResult, make_filename, write_sweep_csv
-from ..config import EquivCircuit, IASettings
+from ..config import (
+    TERMINAL_BIAS_LIMIT_V,
+    EquivCircuit,
+    IASettings,
+    TerminalMode,
+)
 from .instrument import BackendKind, InstrumentPanel
 
 LedFactory = Callable[[], object]
@@ -348,8 +353,14 @@ class CfControlPanel(QWidget):
         amp_holder.setLayout(amp_row)
         self.equiv = QComboBox()
         self.equiv.addItems([e.value for e in EquivCircuit])
+        self.terminal_mode = QComboBox()
+        for tm in TerminalMode:
+            self.terminal_mode.addItem(tm.value, userData=tm)
+        # C-f default: 2-terminal (high-Z devices, full ±10 V bias range).
+        self.terminal_mode.setCurrentText(TerminalMode.TWO_TERMINAL.value)
         ia_form.addRow("AC amplitude", amp_holder)
         ia_form.addRow("Equivalent circuit", self.equiv)
+        ia_form.addRow("Terminal mode", self.terminal_mode)
         layout.addWidget(ia)
 
         # ---- Sweeper group ----
@@ -458,6 +469,7 @@ class CfControlPanel(QWidget):
             ac_amplitude_v=amp_rms,
             dc_bias_v=0.0,  # set per bias by CfExperiment
             equiv_circuit=EquivCircuit(self.equiv.currentText()),
+            terminal_mode=self.terminal_mode.currentData(),
             imp_index=0,
         )
         sweep = SweeperSettings(
@@ -613,6 +625,28 @@ class CfMainWindow(QMainWindow):
         if not cfg.run.output_dir:
             QMessageBox.warning(self, "Config", "Pick an output folder.")
             return
+
+        # Bias-range guard: the MFIA hard-limits DC bias by terminal mode
+        # (±3 V in 4-terminal, ±10 V in 2-terminal). Out-of-range points would
+        # be silently clamped on hardware, producing mislabeled data — warn
+        # before a long campaign rather than after.
+        limit = TERMINAL_BIAS_LIMIT_V[cfg.ia.terminal_mode]
+        over = [b for b in cfg.bias.values_v if abs(b) > limit]
+        if over:
+            over_str = ", ".join(f"{b:g}" for b in over)
+            resp = QMessageBox.warning(
+                self,
+                "Bias out of range",
+                f"In {cfg.ia.terminal_mode.value} mode the MFIA limits DC bias "
+                f"to ±{limit:g} V, but these values exceed it: {over_str} V.\n\n"
+                f"Those points will be clamped by the hardware. Switch to "
+                f"2-terminal for the full ±10 V range, or remove them.\n\n"
+                f"Proceed anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if resp != QMessageBox.StandardButton.Yes:
+                return
         out_dir = Path(cfg.run.output_dir)
         if not out_dir.exists():
             try:
