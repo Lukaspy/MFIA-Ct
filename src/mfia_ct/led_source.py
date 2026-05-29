@@ -1,80 +1,146 @@
-"""Multi-channel LED source interface (Mightex 8-ch controller).
+"""Multi-channel LED source interface (NI PXI-7853R FPGA driver).
 
-The intent is a Mightex Sirius or BLS-series multi-channel LED controller
-driven from Python over USB. The concrete interface (Windows DLL via
-ctypes vs USB-serial ASCII) depends on the exact model number, which
-isn't pinned yet — so this module provides:
+The optical source is the 8-channel LED AWG driven by an NI PXI-7853R
+FPGA card — see the PXI-AWG repo's ``led_driver`` package. Its scripting
+entry point, ``led_driver.LEDController``, addresses channels **by
+wavelength** and drives them by **intensity percent** (0–100%), with
+per-channel current limits and an optional power calibration applied
+internally. The channel→wavelength wiring is Ch0=850 nm … Ch7=385 nm.
 
-- ``LedSource`` Protocol: the interface the rest of the project codes to.
-- ``MightexStub``: real-driver placeholder; raises ``NotImplementedError``
-  on connect with a clear next-step message. The CfExperiment will refuse
-  to start an illuminated step against the stub, so a partial deployment
-  can still run dark-only campaigns.
-- ``MockLedSource``: in-memory implementation that records the call
-  sequence and tracks per-channel state. Used by the GUI's --mock path
-  and by tests to assert ordering ("disable before enable next", etc.).
+This module exposes:
 
-When the Mightex SDK choice is made, replace MightexStub's connect()
-with the real implementation; everything upstream stays the same.
+- ``LedSource`` Protocol: the wavelength/percent interface the C-f
+  experiment codes to.
+- ``PxiLedSource``: production adapter wrapping ``LEDController``. The
+  ``led_driver`` import is lazy (deferred to ``connect``) so this package
+  doesn't hard-depend on it; with ``bitfile=None`` it runs the driver's
+  own mock backend (no FPGA / no ``nifpga`` needed).
+- ``MockLedSource``: lightweight in-memory fake that records the call
+  sequence. Used by tests and the GUI's --mock path so they work even
+  when ``led_driver`` isn't installed.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Optional, Protocol, runtime_checkable
+
+# Canonical physical wiring of the LED source (Ch0=850 nm … Ch7=385 nm),
+# mirroring led_driver.config.DEFAULT_WAVELENGTHS_NM. Used by the mock and
+# as the GUI's channel list default.
+DEFAULT_WAVELENGTHS_NM = [850.0, 740.0, 625.0, 590.0, 530.0, 505.0, 470.0, 385.0]
 
 
 @runtime_checkable
 class LedSource(Protocol):
-    n_channels: int
-
     def connect(self) -> None: ...
     def disconnect(self) -> None: ...
     def idn(self) -> str: ...
-    def set_channel_current(self, channel: int, current_ma: float) -> None: ...
-    def enable_channel(self, channel: int) -> None:
-        """Turn on a single channel; implicitly turns off all others."""
+    def wavelengths(self) -> list[float]:
+        """Wavelengths (nm) of all addressable channels."""
         ...
-    def disable_all(self) -> None: ...
+    def set_intensity(self, nm: float, pct: float) -> None:
+        """Set CW intensity (0–100 %) on the channel at ``nm`` and enable it."""
+        ...
+    def all_off(self) -> None:
+        """Zero and disable every channel."""
+        ...
+    def current_ma_for(self, nm: float, pct: float) -> Optional[float]:
+        """Best-effort actual drive current (mA) for a wavelength+percent,
+        or None if the full-scale isn't known. Informational only.
+        """
+        ...
 
 
-class MightexStub:
-    """Placeholder for the eventual real Mightex driver.
+class PxiLedSource:
+    """Adapter over ``led_driver.LEDController`` (NI PXI-7853R).
 
-    Refusing connect() at construction time would prevent the GUI from
-    even loading; refusing at connect() time lets the user pick "real
-    LED source" in the GUI, see the helpful error, then switch to the
-    mock without restarting.
+    Parameters
+    ----------
+    bitfile : str or None
+        Compiled ``.lvbitx`` FPGA bitfile. ``None`` runs the led_driver
+        package's own MockBackend — useful to exercise this adapter
+        without hardware.
+    resource : str
+        NI-RIO resource name (default ``"RIO0"``).
+    use_cal : bool
+        Apply the led_driver power calibration so equal ``pct`` across
+        wavelengths yields equal optical power. Requires a recorded
+        calibration; uncalibrated channels pass through linearly.
     """
 
-    n_channels = 8
-
-    def __init__(self, resource: str = "") -> None:
+    def __init__(
+        self,
+        bitfile: Optional[str] = None,
+        resource: str = "RIO0",
+        use_cal: bool = False,
+    ) -> None:
+        self.bitfile = bitfile
         self.resource = resource
+        self.use_cal = use_cal
+        self._ctl = None
+        # full_scale per wavelength, cached on connect for current_ma_for.
+        self._full_scale_ma: dict[float, float] = {}
 
     def connect(self) -> None:
-        raise NotImplementedError(
-            "Mightex driver not yet implemented. Pin the model number "
-            "(BLS-1000-2 / Sirius LED / etc.) and choose the interface "
-            "(Mightex Windows SDK via ctypes, or USB serial ASCII), then "
-            "fill in this method. The CfExperiment loop will work as soon "
-            "as the methods of LedSource are implemented."
+        try:
+            from led_driver import LEDController
+        except ImportError as e:
+            raise RuntimeError(
+                "led_driver is not importable. Clone the PXI-AWG repo and "
+                "put its directory on PYTHONPATH (or drop a .pth pointing at "
+                "it into this venv's site-packages). Original error: " + str(e)
+            ) from e
+
+        self._ctl = LEDController(
+            self.bitfile,
+            self.resource,
+            use_cal=self.use_cal,
+            auto_connect=False,
         )
+        if not self._ctl.connect():
+            self._ctl = None
+            raise RuntimeError(
+                f"LEDController.connect() failed for resource {self.resource!r} "
+                f"(bitfile={self.bitfile!r})."
+            )
+        # Cache full-scale currents for the current_ma_for helper.
+        self._full_scale_ma = {}
+        for ch in self._ctl.channels():
+            wl = ch.get("wavelength_nm")
+            if wl is not None:
+                self._full_scale_ma[float(wl)] = float(ch.get("full_scale_ma", 0.0))
 
     def disconnect(self) -> None:
-        pass
+        if self._ctl is not None:
+            try:
+                self._ctl.disconnect()
+            finally:
+                self._ctl = None
 
     def idn(self) -> str:
-        return "Mightex (stub — not implemented)"
+        mode = "mock" if self.bitfile is None else f"FPGA {self.resource}"
+        return f"PXI-7853R 8-ch LED driver ({mode})"
 
-    def set_channel_current(self, channel: int, current_ma: float) -> None:
-        raise NotImplementedError
+    def wavelengths(self) -> list[float]:
+        if self._ctl is None:
+            return list(DEFAULT_WAVELENGTHS_NM)
+        return [float(w) for w in self._ctl.wavelengths()]
 
-    def enable_channel(self, channel: int) -> None:
-        raise NotImplementedError
+    def set_intensity(self, nm: float, pct: float) -> None:
+        if self._ctl is None:
+            raise RuntimeError("PxiLedSource.connect() must be called first")
+        self._ctl.set_intensity(nm=nm, pct=pct)
 
-    def disable_all(self) -> None:
-        raise NotImplementedError
+    def all_off(self) -> None:
+        if self._ctl is not None:
+            self._ctl.all_off()
+
+    def current_ma_for(self, nm: float, pct: float) -> Optional[float]:
+        fs = self._full_scale_ma.get(float(nm))
+        if fs is None:
+            return None
+        return (pct / 100.0) * fs
 
 
 @dataclass
@@ -84,19 +150,21 @@ class _Call:
 
 
 class MockLedSource:
-    """Records the call sequence + tracks per-channel state for tests.
+    """Records the call sequence + tracks state, in the wavelength/percent
+    model. No ``led_driver`` dependency, so tests run anywhere.
 
-    ``active_channel`` is None when all channels are off, otherwise the
-    index of the single channel that was last enabled (matching the
-    "only one on at a time" Mightex behavior most C-f campaigns want).
+    ``active`` is ``{nm: pct}`` of the single channel last set (the driver's
+    set_intensity enables one channel; dark/``all_off`` clears it).
     """
 
-    def __init__(self, n_channels: int = 8) -> None:
-        self.n_channels = n_channels
+    def __init__(self, wavelengths: Optional[list[float]] = None) -> None:
+        self._wavelengths = list(wavelengths or DEFAULT_WAVELENGTHS_NM)
         self.calls: list[_Call] = []
-        self.currents_ma = [0.0] * n_channels
-        self.active_channel: int | None = None
+        self.active: dict[float, float] = {}
         self.connected = False
+        # Mirror the PXI default full-scale (1000 mA, 590 nm driver is 750 mA).
+        self._full_scale_ma = {wl: (750.0 if wl == 590.0 else 1000.0)
+                               for wl in self._wavelengths}
 
     def connect(self) -> None:
         self.calls.append(_Call("connect"))
@@ -107,20 +175,25 @@ class MockLedSource:
         self.connected = False
 
     def idn(self) -> str:
-        return "MOCK,MightexLed,0,0"
+        return "MOCK,PXI-LED,0,0"
 
-    def set_channel_current(self, channel: int, current_ma: float) -> None:
-        if not 0 <= channel < self.n_channels:
-            raise ValueError(f"channel {channel} out of range 0..{self.n_channels - 1}")
-        self.calls.append(_Call("set_channel_current", {"channel": channel, "current_ma": current_ma}))
-        self.currents_ma[channel] = current_ma
+    def wavelengths(self) -> list[float]:
+        return list(self._wavelengths)
 
-    def enable_channel(self, channel: int) -> None:
-        if not 0 <= channel < self.n_channels:
-            raise ValueError(f"channel {channel} out of range 0..{self.n_channels - 1}")
-        self.calls.append(_Call("enable_channel", {"channel": channel}))
-        self.active_channel = channel
+    def set_intensity(self, nm: float, pct: float) -> None:
+        if float(nm) not in self._wavelengths:
+            raise KeyError(
+                f"No channel at {nm} nm. Available: {self._wavelengths}"
+            )
+        self.calls.append(_Call("set_intensity", {"nm": float(nm), "pct": pct}))
+        self.active = {float(nm): pct}
 
-    def disable_all(self) -> None:
-        self.calls.append(_Call("disable_all"))
-        self.active_channel = None
+    def all_off(self) -> None:
+        self.calls.append(_Call("all_off"))
+        self.active = {}
+
+    def current_ma_for(self, nm: float, pct: float) -> Optional[float]:
+        fs = self._full_scale_ma.get(float(nm))
+        if fs is None:
+            return None
+        return (pct / 100.0) * fs

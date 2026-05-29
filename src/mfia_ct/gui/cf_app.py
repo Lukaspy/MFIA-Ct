@@ -75,17 +75,11 @@ from .instrument import BackendKind, InstrumentPanel
 LedFactory = Callable[[], object]
 
 
-# Default Mightex channels used by the multi-select / sequence builder.
-DEFAULT_CHANNELS = [
-    (0, 385.0),
-    (1, 470.0),
-    (2, 505.0),
-    (3, 530.0),
-    (4, 590.0),
-    (5, 625.0),
-    (6, 740.0),
-    (7, 850.0),
-]
+# Wavelengths offered by the multi-select / sequence builder, in
+# measurement order (UV→IR). The LED driver addresses by wavelength, so
+# physical channel index doesn't matter here. 740 & 850 nm are below the
+# Ge2Se3 film gap but above Si's — the substrate-only mechanism probe.
+DEFAULT_CHANNEL_WAVELENGTHS = [385.0, 470.0, 505.0, 530.0, 590.0, 625.0, 740.0, 850.0]
 
 
 def _spin(value: float, lo: float, hi: float, step: float, decimals: int = 6) -> QDoubleSpinBox:
@@ -146,11 +140,11 @@ class CfWorker(QObject):
 class IlluminationEditor(QWidget):
     """Two views of the same illumination sequence:
 
-    - **Channels tab**: pick wavelengths via checkbox; per-channel current and
-      a single global settle. "Interleave dark" auto-builds the dark-pre and
-      dark-post-N pattern. This is the common case.
-    - **Sequence tab**: explicit table — one row per step, edit type /
-      wavelength / current / settle. Lets you randomize order, repeat
+    - **Channels tab**: pick wavelengths via checkbox; per-channel intensity
+      (%) and a single global settle. "Interleave dark" auto-builds the
+      dark-pre and dark-post-N pattern. This is the common case.
+    - **Sequence tab**: explicit table — one row per step, edit label /
+      wavelength / intensity / settle. Lets you randomize order, repeat
       channels, or assign per-step settle times.
 
     The Channels tab is authoritative until the user edits the Sequence
@@ -175,23 +169,23 @@ class IlluminationEditor(QWidget):
         chan_layout.addWidget(self.dark_pre)
         chan_layout.addWidget(self.dark_post)
 
-        ch_box = QGroupBox("Mightex channels")
+        ch_box = QGroupBox("LED channels (by wavelength)")
         ch_form = QFormLayout(ch_box)
-        self.channel_rows: list[tuple[QCheckBox, QDoubleSpinBox]] = []
-        for idx, wl in DEFAULT_CHANNELS:
-            cb = QCheckBox(f"{int(wl)} nm  (ch {idx + 1})")
+        self.channel_rows: list[tuple[float, QCheckBox, QDoubleSpinBox]] = []
+        for wl in DEFAULT_CHANNEL_WAVELENGTHS:
+            cb = QCheckBox(f"{int(wl)} nm")
             cb.setChecked(True)
-            cur = _spin(20.0, 0.0, 1000.0, 1.0, decimals=2)
-            cur.setSuffix(" mA")
+            pct = _spin(100.0, 0.0, 100.0, 1.0, decimals=1)
+            pct.setSuffix(" %")
             row = QHBoxLayout()
             row.addWidget(cb, stretch=1)
-            row.addWidget(cur)
+            row.addWidget(pct)
             holder = QWidget()
             holder.setLayout(row)
             ch_form.addRow(holder)
-            self.channel_rows.append((cb, cur))
+            self.channel_rows.append((wl, cb, pct))
             cb.toggled.connect(self._emit_changed)
-            cur.valueChanged.connect(self._emit_changed)
+            pct.valueChanged.connect(self._emit_changed)
         chan_layout.addWidget(ch_box)
 
         settle_box = QGroupBox("Settle times")
@@ -214,16 +208,16 @@ class IlluminationEditor(QWidget):
         # ---- Sequence tab (free-form table) ----
         seq = QWidget()
         seq_layout = QVBoxLayout(seq)
-        self.table = QTableWidget(0, 5)
+        self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(
-            ["Label", "Channel", "Wavelength (nm)", "Current (mA)", "Settle (s)"]
+            ["Label", "Wavelength (nm, blank=dark)", "Intensity (%)", "Settle (s)"]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         seq_layout.addWidget(self.table)
         btns = QHBoxLayout()
         add_btn = QPushButton("+ row")
         del_btn = QPushButton("− row")
-        add_btn.clicked.connect(lambda: self._add_row("step", None, 0.0, 0.0, 30.0))
+        add_btn.clicked.connect(lambda: self._add_row("step", None, 0.0, 30.0))
         del_btn.clicked.connect(self._delete_selected_rows)
         btns.addWidget(add_btn)
         btns.addWidget(del_btn)
@@ -248,31 +242,23 @@ class IlluminationEditor(QWidget):
         self.table.setRowCount(0)
         seq = self.build_sequence()
         for s in seq.steps:
-            self._add_row(
-                s.label,
-                s.channel_index,
-                s.wavelength_nm,
-                s.current_ma,
-                s.settle_s,
-            )
+            self._add_row(s.label, s.wavelength_nm, s.intensity_pct, s.settle_s)
 
     def _add_row(
         self,
         label: str,
-        channel: Optional[int],
-        wavelength: float,
-        current_ma: float,
+        wavelength: Optional[float],
+        intensity_pct: float,
         settle_s: float,
     ) -> None:
         row = self.table.rowCount()
         self.table.insertRow(row)
         self.table.setItem(row, 0, QTableWidgetItem(label))
         self.table.setItem(
-            row, 1, QTableWidgetItem("" if channel is None else str(channel))
+            row, 1, QTableWidgetItem("" if wavelength is None else f"{wavelength:g}")
         )
-        self.table.setItem(row, 2, QTableWidgetItem(f"{wavelength:g}"))
-        self.table.setItem(row, 3, QTableWidgetItem(f"{current_ma:g}"))
-        self.table.setItem(row, 4, QTableWidgetItem(f"{settle_s:g}"))
+        self.table.setItem(row, 2, QTableWidgetItem(f"{intensity_pct:g}"))
+        self.table.setItem(row, 3, QTableWidgetItem(f"{settle_s:g}"))
 
     def _delete_selected_rows(self) -> None:
         rows = sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True)
@@ -287,16 +273,17 @@ class IlluminationEditor(QWidget):
         """
         steps: list[IlluminationStep] = []
         if self.dark_pre.isChecked():
-            steps.append(IlluminationStep("dark_pre", None, 0.0, 0.0, self.dark_settle.value()))
-        for (cb, cur), (idx, wl) in zip(self.channel_rows, DEFAULT_CHANNELS):
+            steps.append(
+                IlluminationStep("dark_pre", None, 0.0, self.dark_settle.value())
+            )
+        for wl, cb, pct in self.channel_rows:
             if not cb.isChecked():
                 continue
             steps.append(
                 IlluminationStep(
                     f"{int(wl)}nm",
-                    idx,
                     wl,
-                    cur.value(),
+                    pct.value(),
                     self.light_settle.value(),
                 )
             )
@@ -305,7 +292,6 @@ class IlluminationEditor(QWidget):
                     IlluminationStep(
                         f"dark_post_{int(wl)}",
                         None,
-                        0.0,
                         0.0,
                         self.dark_settle.value(),
                     )
@@ -322,12 +308,11 @@ class IlluminationEditor(QWidget):
         steps: list[IlluminationStep] = []
         for r in range(self.table.rowCount()):
             label = self.table.item(r, 0).text().strip() if self.table.item(r, 0) else "step"
-            ch_raw = self.table.item(r, 1).text().strip() if self.table.item(r, 1) else ""
-            wl = float(self.table.item(r, 2).text() or 0)
-            cur = float(self.table.item(r, 3).text() or 0)
-            settle = float(self.table.item(r, 4).text() or 0)
-            channel = int(ch_raw) if ch_raw else None
-            steps.append(IlluminationStep(label, channel, wl, cur, settle))
+            wl_raw = self.table.item(r, 1).text().strip() if self.table.item(r, 1) else ""
+            pct = float(self.table.item(r, 2).text() or 0)
+            settle = float(self.table.item(r, 3).text() or 0)
+            wl = float(wl_raw) if wl_raw else None
+            steps.append(IlluminationStep(label, wl, pct, settle))
         return IlluminationSequence(steps=steps)
 
 
@@ -399,6 +384,26 @@ class CfControlPanel(QWidget):
         illum_layout.addWidget(self.illum_editor)
         layout.addWidget(illum_box)
 
+        # ---- LED source (NI PXI-7853R via led_driver) ----
+        led = QGroupBox("LED source (PXI-7853R)")
+        led_form = QFormLayout(led)
+        self.led_bitfile = QLineEdit("")
+        self.led_bitfile.setPlaceholderText("blank = led_driver mock (no FPGA)")
+        led_browse = QPushButton("…")
+        led_browse.setMaximumWidth(40)
+        led_browse.clicked.connect(self._browse_bitfile)
+        bf_row = QHBoxLayout()
+        bf_row.addWidget(self.led_bitfile, stretch=1)
+        bf_row.addWidget(led_browse)
+        bf_holder = QWidget()
+        bf_holder.setLayout(bf_row)
+        self.led_resource = QLineEdit("RIO0")
+        self.led_use_cal = QCheckBox("Apply power calibration (equal flux across λ)")
+        led_form.addRow(".lvbitx bitfile", bf_holder)
+        led_form.addRow("NI-RIO resource", self.led_resource)
+        led_form.addRow(self.led_use_cal)
+        layout.addWidget(led)
+
         # ---- Run metadata + output ----
         run = QGroupBox("Run / output")
         run_form = QFormLayout(run)
@@ -440,6 +445,13 @@ class CfControlPanel(QWidget):
         path = QFileDialog.getExistingDirectory(self, "Output folder", self.output_dir.text())
         if path:
             self.output_dir.setText(path)
+
+    def _browse_bitfile(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "FPGA bitfile", self.led_bitfile.text(), "LabVIEW FPGA (*.lvbitx)"
+        )
+        if path:
+            self.led_bitfile.setText(path)
 
     def parse_bias_list(self) -> list[float]:
         raw = self.bias_list.text().strip()
@@ -586,13 +598,26 @@ class CfMainWindow(QMainWindow):
     def _on_instrument_connected(self, backend, kind: str) -> None:
         self.backend = backend
         if kind == BackendKind.MOCK_KEY:
+            # Lightweight in-memory LED for the mock path — works without
+            # led_driver installed.
             from ..led_source import MockLedSource
 
             self.led_factory = lambda: MockLedSource()
         else:
-            from ..led_source import MightexStub
+            # Real LED driver (NI PXI-7853R via led_driver). Reads the LED
+            # group fields at Start time; blank bitfile → led_driver's own
+            # mock backend (lets you dry-run the LED path against a real MFIA).
+            from ..led_source import PxiLedSource
 
-            self.led_factory = lambda: MightexStub()
+            def _make_pxi() -> PxiLedSource:
+                bf = self.controls.led_bitfile.text().strip() or None
+                return PxiLedSource(
+                    bitfile=bf,
+                    resource=self.controls.led_resource.text().strip() or "RIO0",
+                    use_cal=self.controls.led_use_cal.isChecked(),
+                )
+
+            self.led_factory = _make_pxi
         self.controls.start_btn.setEnabled(True)
         self.status_label.setText("Idle. Configure and press Start campaign.")
 
@@ -656,9 +681,13 @@ class CfMainWindow(QMainWindow):
                 return
 
         led = self.led_factory() if self.led_factory else None
-        # Refuse before kicking off a long campaign if the user picked
-        # illuminated steps but only the stub driver is available.
-        if any(not s.is_dark for s in cfg.illumination.steps):
+        # If the run uses illuminated steps, fail fast: probe the LED source
+        # now (connect + verify the requested wavelengths exist) rather than
+        # dying partway through a multi-hour campaign.
+        lit_wavelengths = {
+            s.wavelength_nm for s in cfg.illumination.steps if not s.is_dark
+        }
+        if lit_wavelengths:
             if led is None:
                 QMessageBox.critical(
                     self,
@@ -666,17 +695,30 @@ class CfMainWindow(QMainWindow):
                     "Illuminated steps configured but no LED source is wired.",
                 )
                 return
-            # Try a dummy connect now so MightexStub raises early with its
-            # helpful "not yet implemented" message instead of dying mid-run.
             try:
                 led.connect()
-                led.disconnect()
-            except NotImplementedError as e:
-                QMessageBox.critical(self, "LED", str(e))
+                try:
+                    available = set(led.wavelengths())
+                    missing = sorted(w for w in lit_wavelengths if w not in available)
+                finally:
+                    led.disconnect()
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "LED",
+                    f"Could not open the LED source:\n{type(e).__name__}: {e}",
+                )
                 return
-            except Exception:
-                # Other errors will be surfaced when CfExperiment connects.
-                pass
+            if missing:
+                miss = ", ".join(f"{w:g}" for w in missing)
+                avail = ", ".join(f"{w:g}" for w in sorted(available))
+                QMessageBox.critical(
+                    self,
+                    "LED",
+                    f"These wavelengths aren't mapped on the LED source: {miss} nm.\n"
+                    f"Available: {avail} nm.",
+                )
+                return
 
         self._cfg = cfg
         self._sweep_count = 0
@@ -754,22 +796,28 @@ class CfMainWindow(QMainWindow):
         self._traces_ph.clear()
 
     def _add_trace(self, result: SweepResult) -> None:
-        # Color by illumination state — dark grey, lit cycles a colormap.
+        # Color by illumination state — dark grey, lit keyed by wavelength.
         meta = result.metadata
-        if meta.led_channel is None:
+        if meta.wavelength_nm in (0.0, None):
             pen = pg.mkPen((120, 120, 120), width=1)
         else:
+            # Map wavelength to its index in the canonical list for a stable
+            # color; fall back to a hash for off-list wavelengths.
             colors = [
-                (200, 30, 30),
-                (220, 100, 30),
-                (220, 200, 30),
-                (50, 200, 30),
-                (30, 220, 200),
-                (30, 100, 220),
-                (160, 30, 220),
-                (220, 30, 160),
+                (160, 30, 220),  # 385 violet
+                (30, 100, 220),  # 470 blue
+                (30, 200, 200),  # 505 cyan
+                (50, 200, 30),   # 530 green
+                (220, 200, 30),  # 590 amber
+                (220, 100, 30),  # 625 orange
+                (200, 30, 30),   # 740 deep red
+                (140, 20, 20),   # 850 IR
             ]
-            pen = pg.mkPen(colors[meta.led_channel % len(colors)], width=1)
+            try:
+                idx = DEFAULT_CHANNEL_WAVELENGTHS.index(float(meta.wavelength_nm))
+            except ValueError:
+                idx = int(meta.wavelength_nm) % len(colors)
+            pen = pg.mkPen(colors[idx % len(colors)], width=1)
         f = np.asarray(result.frequency_hz)
         zmag = result.z_mag
         phase = result.phase_deg

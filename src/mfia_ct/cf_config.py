@@ -90,26 +90,26 @@ class BiasSequence:
 class IlluminationStep:
     """One illumination state in the per-bias sequence.
 
-    ``channel_index`` is the Mightex channel (0-based); None means "all
-    LEDs off" (dark). ``wavelength_nm`` is informational (it goes into
-    the filename and metadata so the analysis loader can group sweeps)
-    and is 0 for dark steps.
+    The LED source (NI PXI-7853R via ``led_driver``) is addressed by
+    **wavelength** and driven by **intensity percent**. ``wavelength_nm``
+    of None means "all LEDs off" (dark); otherwise it selects the channel
+    and ``intensity_pct`` (0–100) is the commanded drive.
 
-    ``current_ma`` is what gets written to the LED driver. The eventual
-    photon-flux normalization the analysis side wants comes from a
-    separate optical-power measurement (Thorlabs PM at sample plane);
-    this field is just what was commanded, not what was delivered.
+    Intensity is a percent, not a current — the driver maps percent to
+    current internally (per-channel full-scale + safety limits). The actual
+    drive current is recorded best-effort in the sweep metadata; the real
+    photon-flux normalization the analysis side wants comes from a separate
+    optical-power measurement (Thorlabs PM at sample plane).
     """
 
-    label: str  # "dark", "385nm", etc — used in filename
-    channel_index: Optional[int]  # None = dark
-    wavelength_nm: float  # 0 for dark
-    current_ma: float = 0.0
+    label: str  # "dark_pre", "385nm", "dark_post_385" — used in filename
+    wavelength_nm: Optional[float]  # None = dark
+    intensity_pct: float = 0.0
     settle_s: float = 30.0
 
     @property
     def is_dark(self) -> bool:
-        return self.channel_index is None
+        return self.wavelength_nm is None
 
 
 @dataclass
@@ -130,26 +130,19 @@ class IlluminationSequence:
 
     @classmethod
     def default_interleaved(cls) -> "IlluminationSequence":
-        wavelengths = [
-            (0, 385.0),
-            (1, 470.0),
-            (2, 505.0),
-            (3, 530.0),
-            (4, 590.0),
-            (5, 625.0),
-            (6, 740.0),
-            (7, 850.0),
-        ]
+        # Sweep UV→IR; canonical channel wiring (Ch0=850 … Ch7=385) is
+        # handled by the driver's wavelength addressing, so order here is
+        # just the measurement order.
+        wavelengths = [385.0, 470.0, 505.0, 530.0, 590.0, 625.0, 740.0, 850.0]
         steps: list[IlluminationStep] = [
-            IlluminationStep("dark_pre", None, 0.0, current_ma=0.0, settle_s=60.0)
+            IlluminationStep("dark_pre", None, intensity_pct=0.0, settle_s=60.0)
         ]
-        for idx, wl in wavelengths:
+        for wl in wavelengths:
             steps.append(
                 IlluminationStep(
                     f"{int(wl)}nm",
-                    idx,
                     wl,
-                    current_ma=20.0,
+                    intensity_pct=100.0,
                     settle_s=30.0,
                 )
             )
@@ -157,8 +150,7 @@ class IlluminationSequence:
                 IlluminationStep(
                     f"dark_post_{int(wl)}",
                     None,
-                    0.0,
-                    current_ma=0.0,
+                    intensity_pct=0.0,
                     settle_s=60.0,
                 )
             )

@@ -17,10 +17,9 @@ Single-threaded by design — the zhinst client isn't thread-safe and the
 Sweeper module is a long-blocking call that already pumps its own
 progress. The worker thread in the GUI just iterates ``run()``.
 
-If the LED source is the not-yet-implemented MightexStub, illuminated
-steps are detected up-front and the experiment refuses to start with a
-clear error. Dark-only campaigns (illumination_sequence has only dark
-steps) still run.
+If illuminated steps are configured but no LED source is attached, the
+experiment refuses to start with a clear error. Dark-only campaigns
+(illumination_sequence has only dark steps) run without an LED source.
 """
 
 from __future__ import annotations
@@ -47,6 +46,7 @@ class _Backend(Protocol):
         *,
         progress_cb: Optional[Callable[[float], None]] = None,
         stop_check: Optional[Callable[[], bool]] = None,
+        light_active: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
 
 
@@ -124,8 +124,12 @@ class CfExperiment:
                         self.cfg.sweep,
                         progress_cb=_per_point,
                         stop_check=self._stopped,
+                        light_active=not step.is_dark,
                     )
-                    meta = make_metadata_from_config(self.cfg, bias, step)
+                    current_ma = self._current_ma_for(step)
+                    meta = make_metadata_from_config(
+                        self.cfg, bias, step, led_current_ma=current_ma
+                    )
                     yield SweepResult(
                         frequency_hz=freq,
                         z_real=z_real,
@@ -137,7 +141,7 @@ class CfExperiment:
             # cleanup errors; they'd mask the original exception.
             try:
                 if self.led is not None:
-                    self.led.disable_all()
+                    self.led.all_off()
             except Exception:
                 pass
             try:
@@ -154,11 +158,22 @@ class CfExperiment:
         if self.led is None:
             return
         if step.is_dark:
-            self.led.disable_all()
+            self.led.all_off()
             return
-        assert step.channel_index is not None
-        self.led.set_channel_current(step.channel_index, step.current_ma)
-        self.led.enable_channel(step.channel_index)
+        assert step.wavelength_nm is not None
+        self.led.set_intensity(step.wavelength_nm, step.intensity_pct)
+
+    def _current_ma_for(self, step: IlluminationStep) -> Optional[float]:
+        """Best-effort actual drive current for the metadata, or None."""
+        if self.led is None or step.is_dark or step.wavelength_nm is None:
+            return None
+        fn = getattr(self.led, "current_ma_for", None)
+        if fn is None:
+            return None
+        try:
+            return fn(step.wavelength_nm, step.intensity_pct)
+        except Exception:
+            return None
 
 
 def _default_sleeper(seconds: float, stopped: Callable[[], bool]) -> None:

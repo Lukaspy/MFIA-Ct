@@ -37,22 +37,24 @@ from mfia_ct.cf_storage import (
     make_metadata_from_config,
     write_sweep_csv,
 )
+import pytest
+
 from mfia_ct.config import TERMINAL_BIAS_LIMIT_V, TerminalMode
-from mfia_ct.led_source import MightexStub, MockLedSource
+from mfia_ct.led_source import DEFAULT_WAVELENGTHS_NM, MockLedSource, PxiLedSource
 from mfia_ct.mock_hardware import MockMFIA
 
 
 def _fast_cfg(*, with_light: bool = True) -> CfConfig:
     """Minimal CfConfig that runs quickly under the mock backend."""
     illum_steps: list[IlluminationStep] = [
-        IlluminationStep("dark_pre", None, 0.0, 0.0, settle_s=0.0),
+        IlluminationStep("dark_pre", None, intensity_pct=0.0, settle_s=0.0),
     ]
     if with_light:
         illum_steps.append(
-            IlluminationStep("385nm", 0, 385.0, current_ma=20.0, settle_s=0.0)
+            IlluminationStep("385nm", 385.0, intensity_pct=80.0, settle_s=0.0)
         )
         illum_steps.append(
-            IlluminationStep("dark_post_385", None, 0.0, 0.0, settle_s=0.0)
+            IlluminationStep("dark_post_385", None, intensity_pct=0.0, settle_s=0.0)
         )
     cfg = CfConfig(
         sweep=SweeperSettings(
@@ -104,21 +106,31 @@ def test_led_call_ordering() -> None:
     names = [c.name for c in led.calls]
     assert names[0] == "connect"
     assert names[-1] == "disconnect"
-    # The 385 nm step should set current before enabling — never the other way.
-    seen_385_current = False
-    for c in led.calls:
-        if c.name == "set_channel_current" and c.kwargs == {
-            "channel": 0,
-            "current_ma": 20.0,
-        }:
-            seen_385_current = True
-        if c.name == "enable_channel" and c.kwargs == {"channel": 0}:
-            assert seen_385_current, "enable_channel fired before set_channel_current"
-    # Disable-all must fire for every dark step.
-    n_disable_all = sum(1 for c in led.calls if c.name == "disable_all")
+    # The 385 nm lit step drives by wavelength + percent.
+    lit = [c for c in led.calls if c.name == "set_intensity"]
+    assert lit, "expected at least one set_intensity call"
+    assert all(c.kwargs["nm"] == 385.0 and c.kwargs["pct"] == 80.0 for c in lit)
+    # all_off must fire for every dark step, plus once in the cleanup finally.
+    n_all_off = sum(1 for c in led.calls if c.name == "all_off")
     n_dark_steps = sum(1 for s in cfg.illumination.steps if s.is_dark) * len(cfg.bias)
-    # +1 for the final cleanup disable_all in finally.
-    assert n_disable_all == n_dark_steps + 1
+    assert n_all_off == n_dark_steps + 1
+
+
+def test_led_current_ma_recorded_for_lit_steps() -> None:
+    cfg = _fast_cfg(with_light=True)
+    led = MockLedSource()
+    exp = CfExperiment(MockMFIA(), cfg, led=led, sleeper=_no_sleep)
+    results = list(exp.run())
+    lit = [r for r in results if r.metadata.illumination_label == "385nm"]
+    assert lit
+    for r in lit:
+        # 80 % of 385 nm's 1000 mA full-scale = 800 mA.
+        assert r.metadata.led_intensity_pct == 80.0
+        assert r.metadata.led_current_ma == 800.0
+    dark = [r for r in results if r.metadata.illumination_label.startswith("dark")]
+    for r in dark:
+        assert r.metadata.led_intensity_pct is None
+        assert r.metadata.led_current_ma is None
 
 
 def test_refuses_light_without_led() -> None:
@@ -181,16 +193,36 @@ def test_rms_to_peak_conversion_in_metadata() -> None:
     assert math.isclose(meta.amplitude_vpk, 0.030 * math.sqrt(2.0), rel_tol=1e-9)
 
 
-def test_mightex_stub_explains_itself() -> None:
-    stub = MightexStub()
+def test_mock_led_rejects_unmapped_wavelength() -> None:
+    led = MockLedSource()
+    led.connect()
+    with pytest.raises(KeyError):
+        led.set_intensity(999.0, 50.0)
+    led.disconnect()
+
+
+def test_pxi_led_source_against_led_driver_mock() -> None:
+    """Exercise the real PxiLedSource adapter against led_driver's own mock
+    backend (bitfile=None). Skipped if the PXI-AWG led_driver package isn't
+    importable in this environment.
+    """
+    pytest.importorskip("led_driver")
+    led = PxiLedSource(bitfile=None)  # None → led_driver MockBackend
+    led.connect()
     try:
-        stub.connect()
-    except NotImplementedError as e:
-        msg = str(e)
-        assert "Mightex" in msg
-        assert "model number" in msg or "not yet" in msg.lower()
-    else:
-        raise AssertionError("MightexStub.connect should raise NotImplementedError")
+        wls = set(led.wavelengths())
+        assert wls == set(DEFAULT_WAVELENGTHS_NM)
+        led.set_intensity(590.0, 50.0)
+        # Don't assume the on-disk full-scale (a saved GUI config can change
+        # it) — verify the adapter's mA report is linear in percent instead.
+        ma_50 = led.current_ma_for(590.0, 50.0)
+        ma_100 = led.current_ma_for(590.0, 100.0)
+        assert ma_50 is not None and ma_100 is not None
+        assert ma_50 > 0 and abs(ma_100 - 2 * ma_50) < 1e-6
+        assert led.current_ma_for(590.0, 0.0) == 0.0
+        led.all_off()
+    finally:
+        led.disconnect()
 
 
 def test_sweeper_settings_n_points() -> None:

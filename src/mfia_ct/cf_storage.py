@@ -52,12 +52,16 @@ class SweepMetadata:
     bias_v_commanded: float
     illumination_label: str  # e.g. "dark_pre", "385nm", "dark_post_385"
     wavelength_nm: float  # 0 for dark
-    led_channel: Optional[int]  # None for dark
-    led_current_ma: float
+    led_intensity_pct: Optional[float]  # commanded drive %, None for dark
     amplitude_vrms: float
     amplitude_vpk: float
     timestamp: str  # ISO 8601
     notes: str = ""
+    # Best-effort actual drive current (pct × per-channel full-scale); None
+    # if the LED source can't report it. The analysis pipeline keyed on
+    # led_current_ma originally — kept for that, but led_intensity_pct is the
+    # native commanded value for this hardware.
+    led_current_ma: Optional[float] = None
     optical_power_mw: Optional[float] = None  # measured separately; null if not entered
 
 
@@ -145,6 +149,7 @@ def make_metadata_from_config(
     *,
     timestamp: Optional[datetime] = None,
     optical_power_mw: Optional[float] = None,
+    led_current_ma: Optional[float] = None,
 ) -> SweepMetadata:
     """Bundle CfConfig + the active (bias, illumination) into a flat metadata
     record. Convenient single source of truth for both the filename and
@@ -157,13 +162,13 @@ def make_metadata_from_config(
         substrate_type=cfg.run.substrate_type,
         bias_v_commanded=bias_v,
         illumination_label=step.label,
-        wavelength_nm=step.wavelength_nm,
-        led_channel=step.channel_index,
-        led_current_ma=step.current_ma,
+        wavelength_nm=0.0 if step.is_dark else float(step.wavelength_nm),
+        led_intensity_pct=None if step.is_dark else step.intensity_pct,
         amplitude_vrms=vrms,
         amplitude_vpk=vrms * math.sqrt(2.0),
         timestamp=when,
         notes=cfg.run.notes,
+        led_current_ma=led_current_ma,
         optical_power_mw=optical_power_mw,
     )
 
@@ -184,8 +189,10 @@ def write_sweep_csv(result: SweepResult, path: Path | str) -> Path:
         f.write(f"# bias_v_commanded: {meta.bias_v_commanded}\n")
         f.write(f"# illumination_label: {meta.illumination_label}\n")
         f.write(f"# wavelength_nm: {meta.wavelength_nm}\n")
-        f.write(f"# led_channel: {meta.led_channel if meta.led_channel is not None else 'none'}\n")
-        f.write(f"# led_current_ma: {meta.led_current_ma}\n")
+        pct = "none" if meta.led_intensity_pct is None else meta.led_intensity_pct
+        f.write(f"# led_intensity_pct: {pct}\n")
+        ma = "none" if meta.led_current_ma is None else meta.led_current_ma
+        f.write(f"# led_current_ma: {ma}\n")
         f.write(f"# amplitude_vrms: {meta.amplitude_vrms}\n")
         f.write(f"# amplitude_vpk: {meta.amplitude_vpk}\n")
         if meta.optical_power_mw is not None:

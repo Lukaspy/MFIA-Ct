@@ -184,12 +184,15 @@ class MFIA:
         *,
         progress_cb: Optional[Callable[[float], None]] = None,
         stop_check: Optional[Callable[[], bool]] = None,
+        light_active: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Run one frequency sweep via the LabOne Sweeper module.
 
         Returns ``(frequency_hz, z_real, z_imag)`` arrays. Optional
         ``progress_cb`` is called with a 0..1 fraction every ~0.5 s while
         the sweep runs; ``stop_check`` is polled to abort cleanly.
+        ``light_active`` is accepted for signature parity with the mock
+        backend (real hardware's optical state is physical, not commanded).
         """
         if self.daq is None:
             raise RuntimeError("MFIA.connect() must be called first")
