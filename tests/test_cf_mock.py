@@ -289,6 +289,51 @@ def test_terminal_bias_limits() -> None:
     assert [b for b in matrix if abs(b) > two] == []
 
 
+def test_intensity_series_structure() -> None:
+    seq = IlluminationSequence.intensity_series(
+        470.0, [10.0, 50.0, 100.0], interleave_dark=True
+    )
+    labels = [s.label for s in seq.steps]
+    # dark_pre, then (lit, dark) per level → 1 + 3*2 = 7.
+    assert len(seq.steps) == 7
+    assert labels[0] == "dark_pre"
+    lit = [s for s in seq.steps if not s.is_dark]
+    # All lit steps are the same wavelength, stepping intensity.
+    assert all(s.wavelength_nm == 470.0 for s in lit)
+    assert [s.intensity_pct for s in lit] == [10.0, 50.0, 100.0]
+    assert [s.label for s in lit] == ["470nm_10pct", "470nm_50pct", "470nm_100pct"]
+
+
+def test_intensity_series_no_interleave() -> None:
+    seq = IlluminationSequence.intensity_series(
+        590.0, [25.0, 100.0], dark_pre=False, interleave_dark=False
+    )
+    # No dark steps at all → just the two lit levels.
+    assert len(seq.steps) == 2
+    assert all(not s.is_dark for s in seq.steps)
+    assert [s.intensity_pct for s in seq.steps] == [25.0, 100.0]
+
+
+def test_intensity_series_runs_and_records_power() -> None:
+    # End-to-end: a 470 nm intensity series should produce per-level sweeps
+    # with optical_power_mw scaling with drive % (linear model in the mock).
+    cfg = CfConfig(
+        sweep=SweeperSettings(start_hz=1.0, stop_hz=100.0, points_per_decade=3),
+        bias=BiasSequence(values_v=[0.0], bias_settle_s=0.0),
+        illumination=IlluminationSequence.intensity_series(
+            470.0, [25.0, 50.0, 100.0], dark_pre=False, interleave_dark=False,
+            light_settle_s=0.0,
+        ),
+        run=RunMetadata(device_id="MOCK01", substrate_type="p-Si"),
+    )
+    led = MockLedSource(power_model_mw={470.0: 8.0})
+    exp = CfExperiment(MockMFIA(), cfg, led=led, sleeper=_no_sleep)
+    results = list(exp.run())
+    powers = [r.metadata.optical_power_mw for r in results]
+    # 25/50/100 % of 8 mW → 2, 4, 8 mW, strictly increasing.
+    assert powers == pytest.approx([2.0, 4.0, 8.0])
+
+
 def test_progress_callback_fires_with_indices() -> None:
     cfg = _fast_cfg(with_light=False)
     seen: list[tuple[int, int, float]] = []

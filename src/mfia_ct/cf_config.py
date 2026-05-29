@@ -129,6 +129,48 @@ class IlluminationSequence:
         return len(self.steps)
 
     @classmethod
+    def intensity_series(
+        cls,
+        wavelength_nm: float,
+        drive_points_pct: list[float],
+        *,
+        dark_pre: bool = True,
+        interleave_dark: bool = True,
+        light_settle_s: float = 30.0,
+        dark_settle_s: float = 60.0,
+    ) -> "IlluminationSequence":
+        """A single wavelength stepped through several drive levels — the
+        photo-response-vs-intensity sweep used to test whether the response is
+        linear in flux (and therefore whether a power-normalized action
+        spectrum is valid). Dark is interleaved by default so persistent
+        photoconductivity from one level recovers before the next.
+        """
+        steps: list[IlluminationStep] = []
+        if dark_pre:
+            steps.append(
+                IlluminationStep("dark_pre", None, intensity_pct=0.0, settle_s=dark_settle_s)
+            )
+        for pct in drive_points_pct:
+            steps.append(
+                IlluminationStep(
+                    f"{int(wavelength_nm)}nm_{pct:g}pct",
+                    wavelength_nm,
+                    intensity_pct=pct,
+                    settle_s=light_settle_s,
+                )
+            )
+            if interleave_dark:
+                steps.append(
+                    IlluminationStep(
+                        f"dark_post_{pct:g}pct",
+                        None,
+                        intensity_pct=0.0,
+                        settle_s=dark_settle_s,
+                    )
+                )
+        return cls(steps=steps)
+
+    @classmethod
     def default_interleaved(cls) -> "IlluminationSequence":
         # Sweep UV→IR; canonical channel wiring (Ch0=850 … Ch7=385) is
         # handled by the driver's wavelength addressing, so order here is

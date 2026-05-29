@@ -229,13 +229,72 @@ class IlluminationEditor(QWidget):
         btns.addStretch()
         seq_layout.addLayout(btns)
 
+        # ---- Intensity-series tab (linearity check) ----
+        isr = QWidget()
+        isr_form = QFormLayout(isr)
+        self.isr_wavelength = QComboBox()
+        for wl in DEFAULT_CHANNEL_WAVELENGTHS:
+            self.isr_wavelength.addItem(f"{int(wl)} nm", userData=wl)
+        self.isr_drive_points = QLineEdit("10,20,40,70,100")
+        self.isr_light_settle = _spin(30.0, 0.0, 3600.0, 1.0, decimals=1)
+        self.isr_light_settle.setSuffix(" s")
+        self.isr_dark_settle = _spin(60.0, 0.0, 3600.0, 1.0, decimals=1)
+        self.isr_dark_settle.setSuffix(" s")
+        self.isr_interleave_dark = QCheckBox("Interleave dark between levels")
+        self.isr_interleave_dark.setChecked(True)
+        isr_build = QPushButton("Build series → Sequence")
+        isr_build.clicked.connect(self._build_intensity_series)
+        isr_form.addRow(
+            QLabel(
+                "One wavelength stepped through drive levels, to test whether\n"
+                "the photo-response is linear in flux. Builds into the Sequence\n"
+                "tab; run it at a fixed bias."
+            )
+        )
+        isr_form.addRow("Wavelength", self.isr_wavelength)
+        isr_form.addRow("Drive points (%)", self.isr_drive_points)
+        isr_form.addRow("Lit settle", self.isr_light_settle)
+        isr_form.addRow("Dark settle", self.isr_dark_settle)
+        isr_form.addRow(self.isr_interleave_dark)
+        isr_form.addRow(isr_build)
+
+        self._tabs = tabs
+        self._seq_tab_index = 1
         tabs.addTab(chan, "Channels")
         tabs.addTab(seq, "Sequence")
+        tabs.addTab(isr, "Intensity series")
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(tabs)
 
         self._regenerate_table()
+
+    def _build_intensity_series(self) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+
+        wl = self.isr_wavelength.currentData()
+        try:
+            pts = [float(p) for p in self.isr_drive_points.text().split(",") if p.strip()]
+        except ValueError as e:
+            QMessageBox.critical(self, "Intensity series", f"Bad drive points:\n{e}")
+            return
+        if len(pts) < 2:
+            QMessageBox.warning(
+                self, "Intensity series", "Need at least 2 drive points (e.g. 10,100)."
+            )
+            return
+        seq = IlluminationSequence.intensity_series(
+            wl,
+            pts,
+            interleave_dark=self.isr_interleave_dark.isChecked(),
+            light_settle_s=self.isr_light_settle.value(),
+            dark_settle_s=self.isr_dark_settle.value(),
+        )
+        self.table.setRowCount(0)
+        for s in seq.steps:
+            self._add_row(s.label, s.wavelength_nm, s.intensity_pct, s.settle_s)
+        # Switch to the Sequence tab, which is authoritative for the run.
+        self._tabs.setCurrentIndex(self._seq_tab_index)
 
     def _emit_changed(self) -> None:
         self.changed.emit()
