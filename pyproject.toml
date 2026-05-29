@@ -23,6 +23,7 @@ dev = ["pytest>=7", "pytest-qt>=4.4"]
 
 [project.scripts]
 mfia-ct = "mfia_ct.__main__:main"
+mfia-cf = "mfia_ct.cf_main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

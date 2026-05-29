@@ -46,6 +46,7 @@ from ..config import (
 )
 from ..experiment import CtExperiment
 from ..storage import save_run
+from .instrument import BackendKind, InstrumentPanel
 
 FGFactory = Callable[[str], object]
 
@@ -104,38 +105,10 @@ def _int_spin(value: int, lo: int, hi: int) -> QSpinBox:
     return s
 
 
-class BackendKind:
-    MOCK = "Mock (synthetic)"
-    REAL = "Real MFIA"
-
-
 class ControlPanel(QWidget):
     def __init__(self) -> None:
         super().__init__()
         layout = QVBoxLayout(self)
-
-        # Instrument group
-        instr = QGroupBox("Instrument")
-        instr_form = QFormLayout(instr)
-        self.backend_kind = QComboBox()
-        self.backend_kind.addItems([BackendKind.MOCK, BackendKind.REAL])
-        self.device_id = QLineEdit("")
-        self.device_id.setPlaceholderText("e.g. dev32369")
-        self.host = QLineEdit("localhost")
-        self.port = _int_spin(8004, 1, 65535)
-        self.connect_btn = QPushButton("Connect")
-        self.instr_status = QLabel("Not connected.")
-        instr_form.addRow("Backend", self.backend_kind)
-        instr_form.addRow("Device ID", self.device_id)
-        instr_form.addRow("LabOne host", self.host)
-        instr_form.addRow("LabOne port", self.port)
-        instr_form.addRow(self.connect_btn)
-        instr_form.addRow(self.instr_status)
-        layout.addWidget(instr)
-
-        self._real_only_instr = [self.device_id, self.host, self.port]
-        self.backend_kind.currentTextChanged.connect(self._update_instr_widgets)
-        self._update_instr_widgets()
 
         # IA group
         ia = QGroupBox("Impedance Analyzer")
@@ -251,11 +224,6 @@ class ControlPanel(QWidget):
         layout.addLayout(btns)
         layout.addStretch()
 
-    def _update_instr_widgets(self) -> None:
-        is_real = self.backend_kind.currentText() == BackendKind.REAL
-        for w in self._real_only_instr:
-            w.setEnabled(is_real)
-
     def _update_pulse_mode_widgets(self) -> None:
         is_internal = self.pulse_source.currentData() == PulseSource.INTERNAL
         for w in self._internal_only:
@@ -347,18 +315,17 @@ class MainWindow(QMainWindow):
         self.fg_factory: FGFactory | None = None
         self.setWindowTitle("MFIA-Ct — Photo-Capacitance Transient")
 
+        self.instrument_panel = InstrumentPanel()
+        self.instrument_panel.preselect(
+            mock=preselect_mock,
+            device=preselect_device,
+            host=preselect_host,
+            port=preselect_port,
+        )
+        self.instrument_panel.connected.connect(self._on_instrument_connected)
+        self.instrument_panel.disconnected.connect(self._on_instrument_disconnected)
+
         self.controls = ControlPanel()
-        if preselect_mock:
-            self.controls.backend_kind.setCurrentText(BackendKind.MOCK)
-        elif preselect_device is not None:
-            self.controls.backend_kind.setCurrentText(BackendKind.REAL)
-        if preselect_device is not None:
-            self.controls.device_id.setText(preselect_device)
-        if preselect_host is not None:
-            self.controls.host.setText(preselect_host)
-        if preselect_port is not None:
-            self.controls.port.setValue(preselect_port)
-        self.controls.connect_btn.clicked.connect(self._toggle_connection)
         self.controls.fg_test_btn.clicked.connect(self._test_fg_connection)
         self.plot_widget = pg.GraphicsLayoutWidget()
         self.cp_plot = self.plot_widget.addPlot(row=0, col=0, title="Cp")
@@ -383,7 +350,10 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         root = QHBoxLayout(central)
-        root.addWidget(self.controls, stretch=0)
+        left = QVBoxLayout()
+        left.addWidget(self.instrument_panel)
+        left.addWidget(self.controls, stretch=1)
+        root.addLayout(left, stretch=0)
         right = QVBoxLayout()
         right.addWidget(self.plot_widget, stretch=1)
         right.addWidget(self.progress)
@@ -405,72 +375,22 @@ class MainWindow(QMainWindow):
         self._thread: QThread | None = None
         self._worker: AcquisitionWorker | None = None
 
-    def _toggle_connection(self) -> None:
-        if self.backend is None:
-            self._connect_backend()
+    def _on_instrument_connected(self, backend, kind: str) -> None:
+        self.backend = backend
+        if kind == BackendKind.MOCK_KEY:
+            from ..mock_fg import MockFunctionGenerator
+
+            self.fg_factory = lambda r: MockFunctionGenerator(r)
         else:
-            self._disconnect_backend()
+            from ..fg33250a import Agilent33250A
 
-    def _connect_backend(self) -> None:
-        kind = self.controls.backend_kind.currentText()
-        try:
-            if kind == BackendKind.MOCK:
-                from ..mock_fg import MockFunctionGenerator
-                from ..mock_hardware import MockMFIA
-
-                self.backend = MockMFIA()
-                self.fg_factory = lambda r: MockFunctionGenerator(r)
-                label = "Mock backend"
-            else:
-                from ..fg33250a import Agilent33250A
-                from ..hardware import MFIA
-
-                device = self.controls.device_id.text().strip()
-                if not device:
-                    QMessageBox.warning(
-                        self, "Instrument", "Enter a device ID (e.g. dev32369)."
-                    )
-                    return
-                backend = MFIA(
-                    device,
-                    server_host=self.controls.host.text().strip() or "localhost",
-                    server_port=self.controls.port.value(),
-                )
-                backend.connect()
-                self.backend = backend
-                self.fg_factory = lambda r: Agilent33250A(r)
-                label = f"MFIA {device}"
-        except Exception as e:
-            self.backend = None
-            self.fg_factory = None
-            QMessageBox.critical(
-                self,
-                "Instrument",
-                f"Could not connect:\n{type(e).__name__}: {e}",
-            )
-            self.controls.instr_status.setText("Connection failed.")
-            return
-
-        self.controls.instr_status.setText(f"Connected: {label}.")
-        self.controls.connect_btn.setText("Disconnect")
-        self.controls.backend_kind.setEnabled(False)
-        for w in self.controls._real_only_instr:
-            w.setEnabled(False)
+            self.fg_factory = lambda r: Agilent33250A(r)
         self.controls.start_btn.setEnabled(True)
         self.status_label.setText("Idle.")
 
-    def _disconnect_backend(self) -> None:
-        if self.backend is not None and hasattr(self.backend, "disconnect"):
-            try:
-                self.backend.disconnect()
-            except Exception:
-                pass
+    def _on_instrument_disconnected(self) -> None:
         self.backend = None
         self.fg_factory = None
-        self.controls.instr_status.setText("Not connected.")
-        self.controls.connect_btn.setText("Connect")
-        self.controls.backend_kind.setEnabled(True)
-        self.controls._update_instr_widgets()
         self.controls.start_btn.setEnabled(False)
         self.status_label.setText("Connect to an instrument to begin.")
 
@@ -529,7 +449,7 @@ class MainWindow(QMainWindow):
         self.controls.start_btn.setEnabled(False)
         self.controls.stop_btn.setEnabled(True)
         self.controls.save_btn.setEnabled(False)
-        self.controls.connect_btn.setEnabled(False)
+        self.instrument_panel.set_busy(True)
 
     def stop(self) -> None:
         if self._worker:
@@ -570,7 +490,7 @@ class MainWindow(QMainWindow):
         self.controls.start_btn.setEnabled(self.backend is not None)
         self.controls.stop_btn.setEnabled(False)
         self.controls.save_btn.setEnabled(self._t_buf.size > 0)
-        self.controls.connect_btn.setEnabled(True)
+        self.instrument_panel.set_busy(False)
         self.status_label.setText(
             f"Done. {self._t_buf.size} samples, {len(self._pulse_times)} pulses."
         )

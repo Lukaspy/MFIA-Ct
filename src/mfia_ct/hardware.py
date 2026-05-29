@@ -8,11 +8,14 @@ Continuous acquisition uses `daq.subscribe` + `daq.poll` on the IA sample node.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+import math
+import time
+from typing import Any, Callable, Optional
 
 import numpy as np
 
 from .acquisition import StreamChunk
+from .cf_config import CfConfig, SweeperSettings
 from .config import CtConfig, EquivCircuit
 
 # Equivalent-circuit selectors as exposed by /dev/imps/N/model.
@@ -123,6 +126,131 @@ class MFIA:
         ]
         self.daq.set(settings)
         self.daq.sync()
+
+    def configure_impedance_for_cf(self, cfg: CfConfig) -> None:
+        """Configure the IA for frequency sweeping under the C-f campaign.
+
+        Differences from ``configure_impedance``:
+        - No demod TC/rate is written; the Sweeper module manages per-point
+          settling via auto-bandwidth + settling/tcs.
+        - The ``ac_amplitude_v`` in CfConfig is in **V RMS** (B1500 convention).
+          The MFIA ``/imps/N/output/amplitude`` node takes V peak. The √2
+          conversion happens here, exactly once, so the rest of the stack
+          can stay in RMS without per-call worrying about it.
+        """
+        if self.daq is None:
+            raise RuntimeError("MFIA.connect() must be called first")
+        dev = self.device
+        ia = cfg.ia
+        model = _EQUIV_CIRCUIT_NODE_VALUE[ia.equiv_circuit]
+        amp_pk = ia.ac_amplitude_v * math.sqrt(2.0)
+
+        settings = [
+            (f"/{dev}/imps/{ia.imp_index}/enable", 1),
+            (f"/{dev}/imps/{ia.imp_index}/mode", 0),
+            (f"/{dev}/imps/{ia.imp_index}/auto/output", 0),
+            (f"/{dev}/imps/{ia.imp_index}/auto/bw", 1),  # sweeper expects auto-BW on
+            (f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 1),
+            (f"/{dev}/imps/{ia.imp_index}/output/amplitude", amp_pk),
+            (f"/{dev}/imps/{ia.imp_index}/bias/value", ia.dc_bias_v),
+            (f"/{dev}/imps/{ia.imp_index}/bias/enable", 1),
+            (f"/{dev}/imps/{ia.imp_index}/model", model),
+        ]
+        self.daq.set(settings)
+        self.daq.sync()
+
+    def set_dc_bias(self, bias_v: float) -> None:
+        """Update the IA DC bias mid-campaign; bias output stays enabled."""
+        if self.daq is None:
+            raise RuntimeError("MFIA.connect() must be called first")
+        self.daq.set(
+            [
+                (f"/{self.device}/imps/0/bias/value", bias_v),
+                (f"/{self.device}/imps/0/bias/enable", 1),
+            ]
+        )
+        self.daq.sync()
+
+    def run_sweep(
+        self,
+        cfg: SweeperSettings,
+        *,
+        progress_cb: Optional[Callable[[float], None]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Run one frequency sweep via the LabOne Sweeper module.
+
+        Returns ``(frequency_hz, z_real, z_imag)`` arrays. Optional
+        ``progress_cb`` is called with a 0..1 fraction every ~0.5 s while
+        the sweep runs; ``stop_check`` is polled to abort cleanly.
+        """
+        if self.daq is None:
+            raise RuntimeError("MFIA.connect() must be called first")
+        dev = self.device
+        n_pts = cfg.n_points
+
+        sweeper = self.daq.sweep()
+        sweeper.set("device", dev)
+        sweeper.set("gridnode", f"/{dev}/imps/0/freq")
+        sweeper.set("start", cfg.start_hz)
+        sweeper.set("stop", cfg.stop_hz)
+        sweeper.set("samplecount", n_pts)
+        sweeper.set("xmapping", 1 if cfg.log_spacing else 0)
+        # Auto-BW: 0=manual, 1=fixed, 2=auto (recommended for IS).
+        sweeper.set("bandwidthcontrol", 2 if cfg.auto_bandwidth else 0)
+        sweeper.set("settling/tc", float(cfg.settling_tcs))
+        sweeper.set("settling/inaccuracy", float(cfg.settling_inaccuracy))
+        sweeper.set("averaging/sample", int(cfg.averaging_samples))
+        sweeper.set("averaging/time", float(cfg.averaging_time_s))
+        sweeper.set("order", int(cfg.filter_order))
+
+        sample_path = f"/{dev}/imps/0/sample"
+        sweeper.subscribe(sample_path)
+        try:
+            sweeper.execute()
+            while True:
+                if sweeper.finished():
+                    break
+                if stop_check is not None and stop_check():
+                    try:
+                        sweeper.finish()
+                    except Exception:
+                        pass
+                    break
+                if progress_cb is not None:
+                    try:
+                        progress_cb(float(sweeper.progress()))
+                    except Exception:
+                        pass
+                time.sleep(0.5)
+
+            raw = sweeper.read(True)
+        finally:
+            try:
+                sweeper.unsubscribe("*")
+            except Exception:
+                pass
+            try:
+                sweeper.clear()
+            except Exception:
+                pass
+
+        # The sweeper packs the sample path into a nested list.
+        if sample_path not in raw:
+            raise RuntimeError("Sweeper returned no data for the IA sample")
+        sweeps = raw[sample_path]
+        if not sweeps or not sweeps[0]:
+            raise RuntimeError("Sweeper returned empty sweep block")
+        block = sweeps[0][0]
+
+        freq = np.asarray(block.get("grid", block.get("frequency", [])), dtype=float)
+        z_real = np.asarray(block.get("realz", []), dtype=float)
+        z_imag = np.asarray(block.get("imagz", []), dtype=float)
+        if freq.size == 0 or z_real.size != freq.size or z_imag.size != freq.size:
+            raise RuntimeError(
+                "Sweeper data malformed — expected matching grid/realz/imagz arrays"
+            )
+        return freq, z_real, z_imag
 
     def set_aux_out(self, channel: int, value_v: float) -> None:
         if self.daq is None:

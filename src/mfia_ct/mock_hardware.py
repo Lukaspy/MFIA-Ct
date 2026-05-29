@@ -7,13 +7,15 @@ GUI run without a connected MFIA.
 
 from __future__ import annotations
 
+import math
 import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 
 from .acquisition import StreamChunk
+from .cf_config import CfConfig, SweeperSettings
 from .config import CtConfig
 
 
@@ -159,3 +161,73 @@ class MockMFIA:
         cp += self._rng.normal(0, 1e-18 * np.sqrt(enbw), len(t))
         gp += self._rng.normal(0, 1e-12 * np.sqrt(enbw), len(t))
         return cp, gp
+
+    # --- C-f surface --------------------------------------------------------
+
+    def configure_impedance_for_cf(self, cfg: CfConfig) -> None:
+        """No-op for the mock; tests assert on later behavior instead."""
+        self._cf_cfg = cfg
+
+    def set_dc_bias(self, bias_v: float) -> None:
+        self._bias_v = bias_v
+
+    def run_sweep(
+        self,
+        cfg: SweeperSettings,
+        *,
+        progress_cb: Optional[Callable[[float], None]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
+        light_active: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Synthesize a Voigt-2-CPE impedance spectrum.
+
+        Defaults sit roughly where the B1500 analysis put real devices:
+        fast arc τ ≈ 0.1 ms (peak ~1.6 kHz), slow arc τ ≈ 1 s (peak ~0.16 Hz).
+        ``light_active`` collapses R1 by 100× to mimic the dominant
+        photoconductive-shunt effect the analysis report calls out
+        (light primarily modulates R, not C).
+        """
+        n = cfg.n_points
+        if cfg.log_spacing:
+            freq = np.logspace(math.log10(cfg.start_hz), math.log10(cfg.stop_hz), n)
+        else:
+            freq = np.linspace(cfg.start_hz, cfg.stop_hz, n)
+        omega = 2.0 * math.pi * freq
+
+        rs = 300.0
+        # Fast branch (Ge2Se3 / interface), τ1 ≈ 100 µs
+        r1 = 1e4 / (100.0 if light_active else 1.0)
+        tau1 = 1e-4
+        alpha1 = 0.85
+        q1 = (tau1 ** alpha1) / r1
+
+        # Slow branch (substrate / deep traps), τ2 ≈ 1 s
+        r2 = 1e5 / (3.0 if light_active else 1.0)
+        tau2 = 1.0
+        alpha2 = 0.70
+        q2 = (tau2 ** alpha2) / r2
+
+        def cpe_arc(r: float, q: float, alpha: float) -> np.ndarray:
+            jw = 1j * omega
+            return r / (1.0 + r * q * (jw ** alpha))
+
+        z = rs + cpe_arc(r1, q1, alpha1) + cpe_arc(r2, q2, alpha2)
+
+        # Simulate sweep time: cap at 0.2 s/point so mock runs aren't painful.
+        # Low frequencies are the real bottleneck on hardware; we don't need
+        # to reproduce that here.
+        t_per_point = 0.005
+        for i in range(n):
+            time.sleep(t_per_point)
+            if progress_cb is not None and (i % max(1, n // 20) == 0):
+                progress_cb((i + 1) / n)
+            if stop_check is not None and stop_check():
+                # Return what we have so the experiment can shut down gracefully.
+                return freq[: i + 1], z.real[: i + 1], z.imag[: i + 1]
+        if progress_cb is not None:
+            progress_cb(1.0)
+
+        # Toss in a touch of noise so plots aren't suspiciously clean.
+        noise_real = self._rng.normal(0, 0.001, n) * np.abs(z)
+        noise_imag = self._rng.normal(0, 0.001, n) * np.abs(z)
+        return freq, z.real + noise_real, z.imag + noise_imag
