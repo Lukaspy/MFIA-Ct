@@ -58,11 +58,12 @@ class AcquisitionWorker(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, backend, cfg: CtConfig, fg=None) -> None:
+    def __init__(self, backend, cfg: CtConfig, fg=None, led=None) -> None:
         super().__init__()
         self.backend = backend
         self.cfg = cfg
         self.fg = fg
+        self.led = led
         self._exp: CtExperiment | None = None
 
     def stop(self) -> None:
@@ -71,7 +72,7 @@ class AcquisitionWorker(QObject):
 
     def run(self) -> None:
         try:
-            self._exp = CtExperiment(self.backend, self.cfg, fg=self.fg)
+            self._exp = CtExperiment(self.backend, self.cfg, fg=self.fg, led=self.led)
             last_pulse_count = 0
             for ch in self._exp.run():
                 self.chunk.emit(ch)
@@ -160,16 +161,43 @@ class ControlPanel(QWidget):
         for i in range(2):
             self.sync_in_ch.addItem(f"Aux In {i + 1}", userData=i)
         self.sync_threshold = _spin(1.0, -10.0, 10.0, 0.1, decimals=3)
+        # LED-driver mode: pick the wavelength channel + drive level.
+        self.led_wavelength = QComboBox()
+        for wl in (385.0, 470.0, 505.0, 530.0, 590.0, 625.0, 740.0, 850.0):
+            self.led_wavelength.addItem(f"{int(wl)} nm", userData=wl)
+        self.led_wavelength.setCurrentText("470 nm")
+        self.led_intensity = _spin(100.0, 0.0, 100.0, 1.0, decimals=1)
         pulse_form.addRow("Pulse source", self.pulse_source)
         pulse_form.addRow("Aux Out channel", self.aux_ch)
         pulse_form.addRow("High (V)", self.high_v)
         pulse_form.addRow("Low (V)", self.low_v)
+        pulse_form.addRow("LED wavelength", self.led_wavelength)
+        pulse_form.addRow("LED intensity (%)", self.led_intensity)
         pulse_form.addRow("Pulse width (s)", self.pulse_width)
         pulse_form.addRow("Sync input", self.sync_in_ch)
         pulse_form.addRow("Sync threshold (V)", self.sync_threshold)
         pulse_form.addRow("Rest between pulses (s)", self.rest_period)
         pulse_form.addRow("# pulses", self.n_pulses)
         layout.addWidget(pulse)
+
+        # LED source group (NI PXI-7853R via led_driver) — used in LED mode.
+        led = QGroupBox("LED source (PXI-7853R)")
+        led_form = QFormLayout(led)
+        self.led_bitfile = QLineEdit("")
+        self.led_bitfile.setPlaceholderText("blank = led_driver mock (no FPGA)")
+        self.led_resource = QLineEdit("RIO0")
+        self.led_use_cal = QCheckBox("Apply power calibration (linearize + equalize power)")
+        led_form.addRow(".lvbitx bitfile", self.led_bitfile)
+        led_form.addRow("NI-RIO resource", self.led_resource)
+        led_form.addRow(self.led_use_cal)
+        layout.addWidget(led)
+        self._led_widgets = [
+            self.led_wavelength,
+            self.led_intensity,
+            self.led_bitfile,
+            self.led_resource,
+            self.led_use_cal,
+        ]
 
         # Function generator group (Agilent 33250A over GPIB)
         fg = QGroupBox("Function generator (Agilent 33250A)")
@@ -200,7 +228,7 @@ class ControlPanel(QWidget):
         self.fg_enabled.toggled.connect(self._update_fg_widgets)
         self._update_fg_widgets()
 
-        # Track which rows are internal/external-only so we can grey them out.
+        # Track which rows belong to each pulse mode so we can grey them out.
         self._internal_only = [self.aux_ch, self.high_v, self.low_v]
         self._external_only = [
             self.sync_in_ch,
@@ -232,11 +260,16 @@ class ControlPanel(QWidget):
         layout.addStretch()
 
     def _update_pulse_mode_widgets(self) -> None:
-        is_internal = self.pulse_source.currentData() == PulseSource.INTERNAL
+        src = self.pulse_source.currentData()
+        is_internal = src == PulseSource.INTERNAL
+        is_external = src == PulseSource.EXTERNAL
+        is_led = src == PulseSource.LED_8CH
         for w in self._internal_only:
             w.setEnabled(is_internal)
         for w in self._external_only:
-            w.setEnabled(not is_internal)
+            w.setEnabled(is_external)
+        for w in self._led_widgets:
+            w.setEnabled(is_led)
 
     def _update_fg_widgets(self) -> None:
         is_external = self.pulse_source.currentData() == PulseSource.EXTERNAL
@@ -271,6 +304,8 @@ class ControlPanel(QWidget):
                 n_pulses=self.n_pulses.value(),
                 sync_aux_in_channel=self.sync_in_ch.currentData(),
                 sync_threshold_v=self.sync_threshold.value(),
+                led_wavelength_nm=self.led_wavelength.currentData(),
+                led_intensity_pct=self.led_intensity.value(),
             ),
             acq=AcquisitionSettings(poll_interval_s=self.poll_interval.value()),
             fg=FunctionGeneratorSettings(
@@ -385,7 +420,8 @@ class MainWindow(QMainWindow):
 
     def _on_instrument_connected(self, backend, kind: str) -> None:
         self.backend = backend
-        if kind == BackendKind.MOCK_KEY:
+        self._is_mock = kind == BackendKind.MOCK_KEY
+        if self._is_mock:
             from ..mock_fg import MockFunctionGenerator
 
             self.fg_factory = lambda r: MockFunctionGenerator(r)
@@ -399,8 +435,24 @@ class MainWindow(QMainWindow):
     def _on_instrument_disconnected(self) -> None:
         self.backend = None
         self.fg_factory = None
+        self._is_mock = False
         self.controls.start_btn.setEnabled(False)
         self.status_label.setText("Connect to an instrument to begin.")
+
+    def _make_led(self):
+        """Build an LED source for LED-driver pulse mode, matching the backend
+        kind (mock → MockLedSource; real → PxiLedSource from the LED group)."""
+        if getattr(self, "_is_mock", False):
+            from ..led_source import MockLedSource
+
+            return MockLedSource()
+        from ..led_source import PxiLedSource
+
+        return PxiLedSource(
+            bitfile=self.controls.led_bitfile.text().strip() or None,
+            resource=self.controls.led_resource.text().strip() or "RIO0",
+            use_cal=self.controls.led_use_cal.isChecked(),
+        )
 
     def closeEvent(self, event) -> None:
         if self._worker is not None:
@@ -444,8 +496,12 @@ class MainWindow(QMainWindow):
         ):
             fg = self.fg_factory(self._cfg.fg.resource)
 
+        led = None
+        if self._cfg.pulse.source == PulseSource.LED_8CH:
+            led = self._make_led()
+
         self._thread = QThread()
-        self._worker = AcquisitionWorker(self.backend, self._cfg, fg=fg)
+        self._worker = AcquisitionWorker(self.backend, self._cfg, fg=fg, led=led)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.chunk.connect(self._on_chunk)

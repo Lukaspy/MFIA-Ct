@@ -57,16 +57,85 @@ class _FunctionGenerator(Protocol):
 _MIN_POLL_S = 0.001
 
 
+class _Actuator:
+    """Turns the optical pulse on/off for the software-paced internal loop.
+
+    Abstracts what "light on/off" means so the same pacing/timestamping/
+    drain logic drives either an MFIA Aux Out square wave or an 8-channel
+    LED-driver channel.
+    """
+
+    def setup(self) -> None: ...
+    def light_on(self) -> None: ...
+    def light_off(self) -> None: ...
+    def teardown(self) -> None: ...
+
+
+class _AuxOutActuator(_Actuator):
+    def __init__(self, backend, channel: int, high_v: float, low_v: float) -> None:
+        self._backend = backend
+        self._ch = channel
+        self._high = high_v
+        self._low = low_v
+
+    def setup(self) -> None:
+        self._backend.set_aux_out(self._ch, self._low)
+
+    def light_on(self) -> None:
+        self._backend.set_aux_out(self._ch, self._high)
+
+    def light_off(self) -> None:
+        self._backend.set_aux_out(self._ch, self._low)
+
+    def teardown(self) -> None:
+        try:
+            self._backend.set_aux_out(self._ch, self._low)
+        except Exception:
+            pass
+
+
+class _LedActuator(_Actuator):
+    def __init__(self, led, wavelength_nm: float, intensity_pct: float) -> None:
+        self._led = led
+        self._nm = wavelength_nm
+        self._pct = intensity_pct
+        self._connected = False
+
+    def setup(self) -> None:
+        self._led.connect()
+        self._connected = True
+        self._led.all_off()
+
+    def light_on(self) -> None:
+        self._led.set_intensity(self._nm, self._pct)
+
+    def light_off(self) -> None:
+        self._led.all_off()
+
+    def teardown(self) -> None:
+        try:
+            self._led.all_off()
+        except Exception:
+            pass
+        if self._connected:
+            try:
+                self._led.disconnect()
+            except Exception:
+                pass
+
+
 class CtExperiment:
     def __init__(
         self,
         backend: _Backend,
         cfg: CtConfig,
         fg: _FunctionGenerator | None = None,
+        led=None,
     ) -> None:
         self.backend = backend
         self.cfg = cfg
         self.fg = fg
+        self.led = led
         self._stop = threading.Event()
         self._pulse_times: list[float] = []
 
@@ -79,7 +148,8 @@ class CtExperiment:
 
     def run(self) -> Iterator[StreamChunk]:
         self.backend.configure_impedance(self.cfg)
-        external = self.cfg.pulse.source == PulseSource.EXTERNAL
+        source = self.cfg.pulse.source
+        external = source == PulseSource.EXTERNAL
         self.backend.start_continuous(
             external_sync=external,
             sync_aux_in_channel=self.cfg.pulse.sync_aux_in_channel,
@@ -87,15 +157,30 @@ class CtExperiment:
         )
         if external:
             yield from self._run_external()
+        elif source == PulseSource.LED_8CH:
+            if self.led is None:
+                raise RuntimeError(
+                    "LED-driver pulse source selected but no LED source was "
+                    "attached."
+                )
+            actuator = _LedActuator(
+                self.led,
+                self.cfg.pulse.led_wavelength_nm,
+                self.cfg.pulse.led_intensity_pct,
+            )
+            yield from self._run_internal(actuator)
         else:
-            yield from self._run_internal()
+            actuator = _AuxOutActuator(
+                self.backend,
+                self.cfg.pulse.aux_out_channel,
+                self.cfg.pulse.high_v,
+                self.cfg.pulse.low_v,
+            )
+            yield from self._run_internal(actuator)
 
-    def _run_internal(self) -> Iterator[StreamChunk]:
+    def _run_internal(self, actuator: _Actuator) -> Iterator[StreamChunk]:
         t_start = time.monotonic()
 
-        ch = self.cfg.pulse.aux_out_channel
-        high_v = self.cfg.pulse.high_v
-        low_v = self.cfg.pulse.low_v
         period = self.cfg.pulse.period_s
         width = self.cfg.pulse.pulse_width_s
         n = self.cfg.pulse.n_pulses
@@ -107,7 +192,7 @@ class CtExperiment:
         drain_seconds = max(period, 1.0)
 
         try:
-            self.backend.set_aux_out(ch, low_v)
+            actuator.setup()
 
             while not self._stop.is_set():
                 now = time.monotonic() - t_start
@@ -116,7 +201,7 @@ class CtExperiment:
                 if next_pulse_i < n:
                     rise_at = next_pulse_i * period
                     if now >= rise_at:
-                        self.backend.set_aux_out(ch, high_v)
+                        actuator.light_on()
                         t_pulse = time.monotonic() - t_start
                         self._pulse_times.append(t_pulse)
                         if hasattr(self.backend, "record_pulse"):
@@ -127,7 +212,7 @@ class CtExperiment:
                 # Falling edge when the high period ends.
                 if pulse_low_at is not None:
                     if (time.monotonic() - t_start) >= pulse_low_at:
-                        self.backend.set_aux_out(ch, low_v)
+                        actuator.light_off()
                         pulse_low_at = None
 
                 # Shorten the poll if the next scheduled edge lands sooner
@@ -155,10 +240,7 @@ class CtExperiment:
                         break
         finally:
             self.backend.stop_continuous()
-            try:
-                self.backend.set_aux_out(ch, low_v)
-            except Exception:
-                pass
+            actuator.teardown()
 
     def _run_external(self) -> Iterator[StreamChunk]:
         """Polling-only loop. Pulse edges come from the backend's Aux In

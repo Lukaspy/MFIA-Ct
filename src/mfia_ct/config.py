@@ -57,6 +57,7 @@ class PulseSource(str, Enum):
 
     INTERNAL = "Internal (MFIA Aux Out)"
     EXTERNAL = "External (Aux In sync)"
+    LED_8CH = "LED driver (8-ch PXI)"
 
 
 @dataclass
@@ -92,6 +93,9 @@ class PulseSettings:
     # External mode — MFIA reads sync TTL from Aux In and detects edges.
     sync_aux_in_channel: int = 0  # 0 = Aux In 1, 1 = Aux In 2 (API 0-indexed)
     sync_threshold_v: float = 1.0
+    # LED-driver mode (8-ch PXI) — software-paced pulses on one LED channel.
+    led_wavelength_nm: float = 470.0
+    led_intensity_pct: float = 100.0
 
 
 @dataclass
