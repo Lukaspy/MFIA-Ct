@@ -1,90 +1,132 @@
 # MFIA-Ct
 
-Photo-capacitance transient (C-t) measurement GUI for the Zurich Instruments
-MFIA 500 kHz / 5 MHz impedance analyzer. Targeted at semiconductor device
-characterization where you hold the DUT at constant DC bias, apply an optical
-pulse, and record C(t) and G(t) through the light-on / light-off transients.
+Measurement GUIs for the Zurich Instruments MFIA (500 kHz / 5 MHz) impedance
+analyzer, for semiconductor device photo-characterization. Three tools share
+one package:
 
-## What it does
+| Command | Purpose |
+|---------|---------|
+| `mfia-ct`     | **Photo-capacitance transient (C-t)** — hold DC bias, pulse the LED, record Cp(t)/Gp(t) through light-on/off transients. Optional Agilent 33250A function generator over GPIB. |
+| `mfia-cf`     | **C-f / impedance-spectroscopy campaign** — automated bias × illumination × frequency-sweep loops via the LabOne Sweeper, one tidy CSV per sweep. Drives the 8-channel LED source for wavelength-resolved (action-spectrum) measurements. |
+| `mfia-ledcal` | **Automated LED power calibration** — steps each LED channel, reads a Thorlabs PM16, writes the led_driver power calibration that `mfia-cf` consumes. |
 
-- Configures the MFIA's Impedance Analyzer (IA) module — test frequency, AC
-  drive amplitude, DC bias, equivalent circuit model.
-- Continuously streams `Cp` and `Gp` from the IA `sample` node at the demod
-  rate via `daq.subscribe` + `daq.poll`.
-- A background thread software-paces an Aux Out as the optical pulse train,
-  recording the wall-clock time of every pulse edge.
-- Live-plots one continuous Cp(t) and Gp(t) curve with vertical markers at
-  each pulse time, so pulse-to-pulse evolution (drift, fatigue, recovery) is
-  immediately visible.
-- Saves runs to HDF5: `stream/{t,cp,gp}` plus a `pulse_times` array, with the
-  full config as JSON metadata.
+Each tool runs fully against a **mock backend** (no hardware) for development
+and dry-running an experiment plan.
 
-## Architecture
+## Repositories & dependencies
 
-There's no triggered acquisition. The MFIA records continuously; the host
-software paces the LED pulses on Aux Out N and timestamps each edge. The
-floor on pulse period is set by demod rate (sub-ms easily) and host-side
-toggle jitter (~1 ms). For µs-precision pulse timing, drive the LED from an
-external function generator instead and feed its sync into Aux In so it
-gets recorded alongside Cp / Gp — the current GUI doesn't surface that path
-but the hardware backend supports it.
+This project depends on a **second repo**, [`PXI-AWG`](https://github.com/Lukaspy/PXI-AWG),
+which contains the `led_driver` package — the 8-channel LED source driven by an
+NI PXI-7853R FPGA (it generates the analog modulation for a Mightex source with
+dumb analog inputs). `mfia-cf` and `mfia-ledcal` import `led_driver`; `mfia-ct`
+does not.
 
-Note: front-panel Aux Outputs are labeled **1–4**; the API addresses them as
-indices **0–3**. The GUI dropdown shows the front-panel labels.
+Instrument stack:
+- **MFIA** — `zhinst` (LabOne Data Server running locally, default port 8004).
+- **LED source** — `led_driver` (from PXI-AWG) + `nifpga` (real FPGA over PCIe).
+- **PM16 power meter & 33250A** — `pyvisa` + `pyvisa-py` + `ThorlabsPM100`
+  (PM16 over USBTMC; 33250A over GPIB needs NI-VISA + a GPIB adapter).
 
-A mock hardware backend lets you run the entire GUI without a connected MFIA —
-useful for development and dry-running an experiment plan before hitting the
-bench.
-
-## Install
+## Setup on a fresh machine
 
 ```bash
-# Without hardware (mock only — useful for GUI dev):
-pip install -e ".[dev]"
+# 1. Clone both repos side by side
+git clone git@github.com:<you>/MFIA-Ct.git
+git clone git@github.com:Lukaspy/PXI-AWG.git
 
-# With the MFIA hardware backend:
-pip install -e ".[dev,hardware]"
+# 2. Make a venv
+cd MFIA-Ct
+python -m venv .venv
+source .venv/bin/activate
+
+# 3. Install the LED driver (editable) — provides `led_driver`.
+#    Add [hardware] on the rig that has the PXI FPGA (pulls nifpga);
+#    add [gui] only if you also want the standalone led_driver GUI.
+pip install -e ../PXI-AWG                 # mock-capable, no FPGA needed
+pip install -e "../PXI-AWG[hardware]"     # on the PCIe-connected rig
+
+# 4. Install this package.
+pip install -e ".[dev]"                   # mock only
+pip install -e ".[dev,hardware]"          # MFIA + PM16 + 33250A drivers
 ```
 
-The `zhinst` package requires the LabOne Data Server to be running locally
-(default port 8004). See the MFIA user manual §2.5–2.7 for setup.
+> The editable install of PXI-AWG is what makes `led_driver` importable — there
+> is no hidden path hack. If `led_driver` isn't importable, `mfia-cf`/`mfia-ledcal`
+> surface a clear error telling you to `pip install -e ../PXI-AWG`.
+
+### Real-hardware-only pieces (not on PyPI / not in the venv)
+
+- **LabOne Data Server** for the MFIA (Zurich Instruments install).
+- **NI-RIO driver** for the PXI-7853R, and **NI-VISA** if using the 33250A over GPIB.
+- The FPGA bitfile (`.lvbitx`) lives in the PXI-AWG repo; point `mfia-ledcal` /
+  `mfia-cf`'s LED-source field at it on the rig.
 
 ## Run
 
 ```bash
-# Mock backend (no MFIA needed):
-mfia-ct --mock
-
-# Real device:
-mfia-ct --device DEV3000
+mfia-ct  --mock        # or --device dev32369
+mfia-cf  --mock        # or --device dev32369
+mfia-ledcal --mock     # or no flag for real LED + PM16
 ```
+
+Instrument selection (mock vs real MFIA, device id, host, port) is also in the
+GUI's Instrument panel, so a bare launch works too.
+
+## Per-machine state (NOT in git)
+
+- **led_driver config** `~/.config/led_driver/config.json` — channel→wavelength
+  map and per-channel current limits. The code defaults are correct
+  (Ch0=850 nm … Ch7=385 nm; 590 nm limited to 700 mA), so a fresh machine is
+  safe out of the box. ⚠️ **Verify the physical wiring matches** (the LED in the
+  channel the driver calls Ch0 should be the 850 nm one).
+- **led_driver calibration** `~/.config/led_driver/calibration.json` — written by
+  `mfia-ledcal`. **Calibration is physical**: regenerate it on the actual rig
+  with the real fiber/geometry; don't copy it between machines.
+- Measurement output (HDF5 / CSV) is gitignored — it lives outside the repo.
+
+## Notes / gotchas baked into the tools
+
+- **AC amplitude is V RMS** everywhere (matches the B1500 reference); the √2
+  conversion to the MFIA's peak `output/amplitude` node happens once in the
+  backend. Don't second-guess it.
+- **Terminal mode**: 4-terminal caps DC bias at ±3 V; 2-terminal allows ±10 V.
+  `mfia-cf` defaults to 2-terminal (the ±5 V bias matrix needs it); `mfia-ct`
+  defaults 4-terminal. A guard warns if a bias exceeds the selected mode's limit.
+  Match whatever terminal config your reference (B1500) data used.
+- **Raw complex impedance** is always exported (Z, phase, G, B, Cp, Rp, Cs, Rs,
+  Re, Im) — the equivalent-circuit dropdown is a display convenience and does
+  not change the saved C-f data.
+- `mfia-cf` stamps `optical_power_mw` per lit sweep from the LED calibration, so
+  every CSV carries the power its photon-flux normalization needs.
 
 ## Project layout
 
 ```
 src/mfia_ct/
-  config.py          Dataclasses describing an experiment.
-  hardware.py        Real MFIA backend via zhinst.
-  mock_hardware.py   Synthetic backend that generates plausible C-t traces.
-  acquisition.py     DAQ module wrapper — triggered, averaged acquisition.
-  experiment.py      Orchestrates IA + DAQ + pulse generation.
-  storage.py         HDF5 save with metadata.
-  gui/app.py         PyQt6 main window.
-tests/               Smoke tests against the mock backend.
+  config.py          C-t experiment dataclasses (incl. TerminalMode).
+  cf_config.py       C-f campaign config (sweep / bias / illumination).
+  hardware.py        Real MFIA backend (zhinst): C-t streaming + C-f Sweeper.
+  mock_hardware.py   Synthetic backend (C-t traces + Voigt-2-CPE C-f spectra).
+  experiment.py      C-t orchestrator (continuous record + paced pulses).
+  cf_experiment.py   C-f orchestrator (bias × illumination × sweep loops).
+  fg33250a.py        Agilent 33250A function-generator driver (GPIB).
+  led_source.py      LED source: PxiLedSource (wraps led_driver) + mock.
+  pm16.py            Thorlabs PM16 power-meter abstraction + mock.
+  led_calibration.py Automated LED power-calibration core.
+  storage.py         C-t HDF5 save.
+  cf_storage.py      C-f tidy-CSV-per-sweep writer.
+  gui/instrument.py  Shared instrument-selection panel.
+  gui/app.py         C-t GUI.
+  gui/cf_app.py      C-f GUI.
+  gui/cal_app.py     LED calibration GUI.
+tests/               Mock-backed tests (pytest).
+pm16_read.py         Standalone PM16 CLI streamer.
+pm16_gui.py          Standalone PM16 readout GUI.
 ```
 
-## Hardware setup
+## Hardware references
 
-See the MFIA user manual at `../documentation/ziMFIA_UserManual.pdf`. The
-relevant sections for this tool:
-
-- §4.2 Advanced Impedance Measurements (p.60)
-- §4.3 Compensation (p.64) — run Open/Short before each session
-- §5.3 Impedance Analyzer Tab (p.93)
-- §5.7 Data Acquisition Tab (p.116)
-- §5.10 Auxiliary Tab (p.132)
-
-## Status
-
-v0 — minimal end-to-end loop. Roadmap: optical-power sweep, on-the-fly
-exponential fitting, temperature integration.
+MFIA user manual at `../documentation/ziMFIA_UserManual.pdf`:
+§4.2 Advanced Impedance Measurements · §4.3 Compensation (run Open/Short before
+a session) · §5.3 Impedance Analyzer Tab · §5.6 Sweeper Tab · §5.7 Data
+Acquisition Tab · §5.10 Auxiliary Tab.
