@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -393,10 +394,24 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         root = QHBoxLayout(central)
-        left = QVBoxLayout()
-        left.addWidget(self.instrument_panel)
-        left.addWidget(self.controls, stretch=1)
-        root.addLayout(left, stretch=0)
+
+        # The control column has more groups than fit a typical window height
+        # (the form-heavy Optical pulse group gets crushed otherwise). Put it
+        # in a scroll area so every widget keeps its natural size and the
+        # column scrolls.
+        left_panel = QWidget()
+        left_col = QVBoxLayout(left_panel)
+        left_col.setContentsMargins(0, 0, 0, 0)
+        left_col.addWidget(self.instrument_panel)
+        left_col.addWidget(self.controls)
+        left_col.addStretch()
+
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setWidget(left_panel)
+        left_scroll.setMinimumWidth(430)
+        root.addWidget(left_scroll, stretch=0)
         right = QVBoxLayout()
         right.addWidget(self.plot_widget, stretch=1)
         right.addWidget(self.progress)
