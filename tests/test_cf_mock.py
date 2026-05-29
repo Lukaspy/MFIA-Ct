@@ -133,6 +133,31 @@ def test_led_current_ma_recorded_for_lit_steps() -> None:
         assert r.metadata.led_current_ma is None
 
 
+def test_optical_power_recorded_when_calibrated() -> None:
+    cfg = _fast_cfg(with_light=True)  # 385 nm lit step at 80%
+    # MockLedSource with a power model = "calibrated": 385 nm peaks at 6 mW.
+    led = MockLedSource(power_model_mw={385.0: 6.0})
+    exp = CfExperiment(MockMFIA(), cfg, led=led, sleeper=_no_sleep)
+    results = list(exp.run())
+    lit = [r for r in results if r.metadata.illumination_label == "385nm"]
+    assert lit
+    for r in lit:
+        # 80 % of the 6 mW model → 4.8 mW.
+        assert r.metadata.optical_power_mw == pytest.approx(4.8)
+    # Dark steps and uncalibrated channels stay None.
+    for r in results:
+        if r.metadata.illumination_label.startswith("dark"):
+            assert r.metadata.optical_power_mw is None
+
+
+def test_optical_power_none_without_calibration() -> None:
+    cfg = _fast_cfg(with_light=True)
+    led = MockLedSource()  # no power model → uncalibrated
+    exp = CfExperiment(MockMFIA(), cfg, led=led, sleeper=_no_sleep)
+    results = list(exp.run())
+    assert all(r.metadata.optical_power_mw is None for r in results)
+
+
 def test_refuses_light_without_led() -> None:
     cfg = _fast_cfg(with_light=True)
     exp = CfExperiment(MockMFIA(), cfg, led=None, sleeper=_no_sleep)

@@ -53,6 +53,11 @@ class LedSource(Protocol):
         or None if the full-scale isn't known. Informational only.
         """
         ...
+    def predicted_power_mw(self, nm: float, pct: float) -> Optional[float]:
+        """Calibration-predicted delivered optical power (mW) for a
+        wavelength+percent, or None if that channel isn't calibrated.
+        """
+        ...
 
 
 class PxiLedSource:
@@ -155,6 +160,32 @@ class PxiLedSource:
             return None
         return (pct / 100.0) * fs
 
+    def predicted_power_mw(self, nm: float, pct: float) -> Optional[float]:
+        """Delivered optical power from the led_driver calibration.
+
+        With ``use_cal`` on, the command percent is a target fraction of the
+        equalized maximum, so delivered power = pct/100 × equalized_max.
+        With it off, percent is the raw drive and delivered power is the
+        channel's drive→power curve evaluated at it. None if uncalibrated.
+        """
+        if self._ctl is None:
+            return None
+        try:
+            ch = self._ctl.channel_of(nm)
+            cal = self._ctl.cal.channels[ch]
+            if not cal.is_calibrated:
+                return None
+            if self._ctl.use_cal and self._ctl.cal.equalize:
+                eq = self._ctl.cal.equalized_max_power
+                if eq != float("inf"):
+                    return (pct / 100.0) * eq
+                return float(cal.drive_to_power(pct))
+            if self._ctl.use_cal:
+                return (pct / 100.0) * float(cal.max_power)
+            return float(cal.drive_to_power(pct))
+        except Exception:
+            return None
+
 
 @dataclass
 class _Call:
@@ -170,11 +201,19 @@ class MockLedSource:
     set_intensity enables one channel; dark/``all_off`` clears it).
     """
 
-    def __init__(self, wavelengths: Optional[list[float]] = None) -> None:
+    def __init__(
+        self,
+        wavelengths: Optional[list[float]] = None,
+        power_model_mw: Optional[dict[float, float]] = None,
+    ) -> None:
         self._wavelengths = list(wavelengths or DEFAULT_WAVELENGTHS_NM)
         self.calls: list[_Call] = []
         self.active: dict[float, float] = {}
         self.connected = False
+        # Optional {wavelength: max_power_mw}; predicted_power_mw scales it
+        # linearly by drive %. None → uncalibrated (returns None), matching a
+        # real driver with no calibration loaded.
+        self._power_model_mw = power_model_mw
         # Mirror the led_driver defaults: 1000 mA full-scale on every channel
         # except 590 nm, whose driver full-scale is 750 mA but is software
         # current-limited to 700 mA (effective full-scale = 700 mA).
@@ -218,3 +257,11 @@ class MockLedSource:
         if fs is None:
             return None
         return (pct / 100.0) * fs
+
+    def predicted_power_mw(self, nm: float, pct: float) -> Optional[float]:
+        if self._power_model_mw is None:
+            return None
+        max_mw = self._power_model_mw.get(float(nm))
+        if max_mw is None:
+            return None
+        return (pct / 100.0) * max_mw

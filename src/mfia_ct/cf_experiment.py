@@ -127,8 +127,13 @@ class CfExperiment:
                         light_active=not step.is_dark,
                     )
                     current_ma = self._current_ma_for(step)
+                    power_mw = self._optical_power_for(step)
                     meta = make_metadata_from_config(
-                        self.cfg, bias, step, led_current_ma=current_ma
+                        self.cfg,
+                        bias,
+                        step,
+                        led_current_ma=current_ma,
+                        optical_power_mw=power_mw,
                     )
                     yield SweepResult(
                         frequency_hz=freq,
@@ -168,6 +173,21 @@ class CfExperiment:
         if self.led is None or step.is_dark or step.wavelength_nm is None:
             return None
         fn = getattr(self.led, "current_ma_for", None)
+        if fn is None:
+            return None
+        try:
+            return fn(step.wavelength_nm, step.intensity_pct)
+        except Exception:
+            return None
+
+    def _optical_power_for(self, step: IlluminationStep) -> Optional[float]:
+        """Calibration-predicted delivered optical power (mW) for the metadata,
+        so each sweep carries the power the analysis side needs for photon-flux
+        normalization. None for dark steps or uncalibrated channels.
+        """
+        if self.led is None or step.is_dark or step.wavelength_nm is None:
+            return None
+        fn = getattr(self.led, "predicted_power_mw", None)
         if fn is None:
             return None
         try:
