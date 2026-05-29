@@ -403,7 +403,7 @@ class CfControlPanel(QWidget):
         bf_holder = QWidget()
         bf_holder.setLayout(bf_row)
         self.led_resource = QLineEdit("RIO0")
-        self.led_use_cal = QCheckBox("Apply power calibration (equal flux across λ)")
+        self.led_use_cal = QCheckBox("Apply power calibration (linearize + equalize power)")
         led_form.addRow(".lvbitx bitfile", bf_holder)
         led_form.addRow("NI-RIO resource", self.led_resource)
         led_form.addRow(self.led_use_cal)
