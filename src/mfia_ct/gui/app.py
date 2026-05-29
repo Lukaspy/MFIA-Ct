@@ -186,9 +186,17 @@ class ControlPanel(QWidget):
         led_form = QFormLayout(led)
         self.led_bitfile = QLineEdit("")
         self.led_bitfile.setPlaceholderText("blank = led_driver mock (no FPGA)")
+        self.led_bitfile_browse = QPushButton("…")
+        self.led_bitfile_browse.setMaximumWidth(40)
+        self.led_bitfile_browse.clicked.connect(self._browse_bitfile)
+        bf_row = QHBoxLayout()
+        bf_row.addWidget(self.led_bitfile, stretch=1)
+        bf_row.addWidget(self.led_bitfile_browse)
+        bf_holder = QWidget()
+        bf_holder.setLayout(bf_row)
         self.led_resource = QLineEdit("RIO0")
         self.led_use_cal = QCheckBox("Apply power calibration (linearize + equalize power)")
-        led_form.addRow(".lvbitx bitfile", self.led_bitfile)
+        led_form.addRow(".lvbitx bitfile", bf_holder)
         led_form.addRow("NI-RIO resource", self.led_resource)
         led_form.addRow(self.led_use_cal)
         layout.addWidget(led)
@@ -196,6 +204,7 @@ class ControlPanel(QWidget):
             self.led_wavelength,
             self.led_intensity,
             self.led_bitfile,
+            self.led_bitfile_browse,
             self.led_resource,
             self.led_use_cal,
         ]
@@ -259,6 +268,13 @@ class ControlPanel(QWidget):
         btns.addWidget(self.save_btn)
         layout.addLayout(btns)
         layout.addStretch()
+
+    def _browse_bitfile(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "FPGA bitfile", self.led_bitfile.text(), "LabVIEW FPGA (*.lvbitx)"
+        )
+        if path:
+            self.led_bitfile.setText(path)
 
     def _update_pulse_mode_widgets(self) -> None:
         src = self.pulse_source.currentData()
