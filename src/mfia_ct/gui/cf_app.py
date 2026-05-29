@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QTableWidget,
@@ -156,6 +157,9 @@ class IlluminationEditor(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        # Keep the tabbed editor tall enough that the channel checkboxes and
+        # the sequence table stay usable inside the scrolling control column.
+        self.setMinimumHeight(300)
         tabs = QTabWidget()
 
         # ---- Channels tab ----
@@ -213,6 +217,7 @@ class IlluminationEditor(QWidget):
             ["Label", "Wavelength (nm, blank=dark)", "Intensity (%)", "Settle (s)"]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setMinimumHeight(180)
         seq_layout.addWidget(self.table)
         btns = QHBoxLayout()
         add_btn = QPushButton("+ row")
@@ -575,10 +580,24 @@ class CfMainWindow(QMainWindow):
 
         central = QWidget()
         root = QHBoxLayout(central)
-        left = QVBoxLayout()
-        left.addWidget(self.instrument_panel)
-        left.addWidget(self.controls, stretch=1)
-        root.addLayout(left, stretch=0)
+
+        # The control column has more fields than fit a typical window height.
+        # Put it in a scroll area so every widget keeps its natural size and
+        # the column scrolls, rather than Qt squashing spin boxes / the
+        # illumination editor below usability.
+        left_panel = QWidget()
+        left_col = QVBoxLayout(left_panel)
+        left_col.setContentsMargins(0, 0, 0, 0)
+        left_col.addWidget(self.instrument_panel)
+        left_col.addWidget(self.controls)
+        left_col.addStretch()
+
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setWidget(left_panel)
+        left_scroll.setMinimumWidth(430)
+        root.addWidget(left_scroll, stretch=0)
         right = QVBoxLayout()
         right.addWidget(self.plot_widget, stretch=1)
         right.addWidget(self.progress_bias)
