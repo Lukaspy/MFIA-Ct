@@ -39,6 +39,9 @@ class LedSource(Protocol):
     def wavelengths(self) -> list[float]:
         """Wavelengths (nm) of all addressable channels."""
         ...
+    def channel_of(self, nm: float) -> int:
+        """Channel index (0-based) mapped to a wavelength."""
+        ...
     def set_intensity(self, nm: float, pct: float) -> None:
         """Set CW intensity (0–100 %) on the channel at ``nm`` and enable it."""
         ...
@@ -79,8 +82,9 @@ class PxiLedSource:
         self.resource = resource
         self.use_cal = use_cal
         self._ctl = None
-        # full_scale per wavelength, cached on connect for current_ma_for.
-        self._full_scale_ma: dict[float, float] = {}
+        # Effective full-scale current per wavelength (full_scale × safety
+        # current_scale), cached on connect for current_ma_for.
+        self._effective_fs_ma: dict[float, float] = {}
 
     def connect(self) -> None:
         try:
@@ -104,12 +108,16 @@ class PxiLedSource:
                 f"LEDController.connect() failed for resource {self.resource!r} "
                 f"(bitfile={self.bitfile!r})."
             )
-        # Cache full-scale currents for the current_ma_for helper.
-        self._full_scale_ma = {}
+        # Cache effective full-scale (full_scale × current_scale) so the
+        # reported current reflects the per-channel safety limit, not the
+        # raw driver full-scale.
+        self._effective_fs_ma = {}
         for ch in self._ctl.channels():
             wl = ch.get("wavelength_nm")
             if wl is not None:
-                self._full_scale_ma[float(wl)] = float(ch.get("full_scale_ma", 0.0))
+                fs = float(ch.get("full_scale_ma", 0.0))
+                scale = float(ch.get("current_scale", 1.0))
+                self._effective_fs_ma[float(wl)] = fs * scale
 
     def disconnect(self) -> None:
         if self._ctl is not None:
@@ -127,6 +135,11 @@ class PxiLedSource:
             return list(DEFAULT_WAVELENGTHS_NM)
         return [float(w) for w in self._ctl.wavelengths()]
 
+    def channel_of(self, nm: float) -> int:
+        if self._ctl is None:
+            raise RuntimeError("PxiLedSource.connect() must be called first")
+        return int(self._ctl.channel_of(nm))
+
     def set_intensity(self, nm: float, pct: float) -> None:
         if self._ctl is None:
             raise RuntimeError("PxiLedSource.connect() must be called first")
@@ -137,7 +150,7 @@ class PxiLedSource:
             self._ctl.all_off()
 
     def current_ma_for(self, nm: float, pct: float) -> Optional[float]:
-        fs = self._full_scale_ma.get(float(nm))
+        fs = self._effective_fs_ma.get(float(nm))
         if fs is None:
             return None
         return (pct / 100.0) * fs
@@ -162,9 +175,11 @@ class MockLedSource:
         self.calls: list[_Call] = []
         self.active: dict[float, float] = {}
         self.connected = False
-        # Mirror the PXI default full-scale (1000 mA, 590 nm driver is 750 mA).
-        self._full_scale_ma = {wl: (750.0 if wl == 590.0 else 1000.0)
-                               for wl in self._wavelengths}
+        # Mirror the led_driver defaults: 1000 mA full-scale on every channel
+        # except 590 nm, whose driver full-scale is 750 mA but is software
+        # current-limited to 700 mA (effective full-scale = 700 mA).
+        self._effective_fs_ma = {wl: (700.0 if wl == 590.0 else 1000.0)
+                                 for wl in self._wavelengths}
 
     def connect(self) -> None:
         self.calls.append(_Call("connect"))
@@ -180,6 +195,12 @@ class MockLedSource:
     def wavelengths(self) -> list[float]:
         return list(self._wavelengths)
 
+    def channel_of(self, nm: float) -> int:
+        try:
+            return self._wavelengths.index(float(nm))
+        except ValueError:
+            raise KeyError(f"No channel at {nm} nm. Available: {self._wavelengths}")
+
     def set_intensity(self, nm: float, pct: float) -> None:
         if float(nm) not in self._wavelengths:
             raise KeyError(
@@ -193,7 +214,7 @@ class MockLedSource:
         self.active = {}
 
     def current_ma_for(self, nm: float, pct: float) -> Optional[float]:
-        fs = self._full_scale_ma.get(float(nm))
+        fs = self._effective_fs_ma.get(float(nm))
         if fs is None:
             return None
         return (pct / 100.0) * fs
