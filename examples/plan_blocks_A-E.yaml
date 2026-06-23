@@ -1,0 +1,103 @@
+# MFIA-cf measurement plan — worked example (the "Block A–E" protocol).
+#
+# Load this in mfia-cf with "Load plan…" (it stages every block into the
+# overnight queue, in order), then press Run queue. Full field reference:
+# docs/measurement-plan-format.md.
+#
+# NOTE: Block A's *compensation* is a manual LabOne step (open/short/load) the
+# tool can't drive — do it before loading the plan. The QA dark sweep and the
+# dark baseline below ARE run by the plan.
+
+device:
+  id: "2013-4"            # goes into every output filename
+  substrate: "n-Si"
+  notes: "OGT MSM, batch 3 — Block A–E protocol"
+
+output_dir: "/data/mfia/2013-4"   # all CSVs land here (Cf/CV prefixes don't collide)
+
+# Shared instrument + timing defaults. Any block can override these inline.
+defaults:
+  amplitude_mv_rms: 30           # AC test level, V RMS → 30 mV
+  terminal_mode: 2-terminal      # ±10 V bias range (4-terminal caps at ±3 V)
+  equiv_circuit: Cp||Rp
+  device_settle_s: 10            # short DC settle after a light/bias step (OGT is fast)
+  dark_settle_s: 10              # dark-bracket dwell (drift/recovery check)
+  settling_tcs: 7                # per-point AC settling, in demod time constants
+  auto_bandwidth: true
+  freq:                          # default C-f sweep window (1 Hz floor)
+    start_hz: 1
+    stop_hz: 300000
+    points_per_decade: 10
+
+blocks:
+  # ---- Block A: setup & baseline (after manual compensation) ----
+  - name: "A: QA dark sweep"
+    type: c-f
+    bias: [0]                    # anchor bias
+    illumination: {dark_only: true}
+
+  - name: "A: dark baseline @ anchor"
+    type: c-f
+    bias: [0]
+    illumination: {dark_only: true}
+
+  # ---- Block B: C-f spectral grid @ anchor bias, 1 Hz floor ----
+  # For each wavelength (randomized order): dark-pre, ramp intensity, dark-post.
+  - name: "B: spectral grid @ anchor"
+    type: c-f
+    bias: [0]
+    illumination:
+      mode: matrix
+      wavelengths: [385, 470, 505, 530, 590, 625, 740, 850]
+      order: randomized          # seeded → reproducible; realized order is fixed at load
+      seed: 1
+      intensities: [1, 3, 10, 30, 100]   # monotonic increasing
+      dark_bracket: per-wavelength        # dark pre + post around each wavelength's ramp
+
+  # ---- Block C: C-f bias ladder @ one bright reference, 1 Hz floor ----
+  # 1/C² vs V (Mott-Schottky), light-effect collapse, forward-bias MSM null.
+  - name: "C: bias ladder @ 625nm"
+    type: c-f
+    bias: [-4, -2, 0, 1, 2, 4]
+    illumination:
+      mode: fixed                 # this exact illumination runs at every bias
+      steps:
+        - dark
+        - {wl: 625, intensity: 100}
+
+  # ---- Block D: C-f deep anchors @ 10 mHz ----
+  # The single strongest condition per device + its dark; long sweeps that
+  # close the slow arc. Bump the device settle for the slow-trap tail.
+  - name: "D: deep anchor @ 10 mHz"
+    type: c-f
+    bias: [0]
+    device_settle_s: 25           # override: let the ~tens-of-seconds trap settle
+    freq:
+      start_hz: 0.01              # 10 mHz floor
+      stop_hz: 300000
+      points_per_decade: 8
+    illumination:
+      mode: fixed
+      steps:
+        - dark
+        - {wl: 625, intensity: 100}
+
+  # ---- Block E: C-V dispersion across 1/10/100/1000 Hz ----
+  # Anchors (470/505, 625, 740) get the full intensity set; the rest get
+  # dark + 100% only. Frequencies high→low so the reliable data lands first.
+  - name: "E: C-V dispersion"
+    type: c-v
+    frequencies: [1000, 100, 10, 1]
+    bias: {start_v: -4, stop_v: 4, points: 101}
+    illumination:
+      mode: matrix
+      dark_bracket: per-wavelength
+      wavelengths:
+        - {nm: 470, intensities: [1, 3, 10, 30, 100]}   # anchor: full set
+        - {nm: 505, intensities: [1, 3, 10, 30, 100]}   # anchor
+        - {nm: 625, intensities: [1, 3, 10, 30, 100]}   # anchor
+        - {nm: 740, intensities: [1, 3, 10, 30, 100]}   # anchor
+        - {nm: 385, intensities: [100]}                 # others: 100% only
+        - {nm: 530, intensities: [100]}
+        - {nm: 590, intensities: [100]}
+        - {nm: 850, intensities: [100]}

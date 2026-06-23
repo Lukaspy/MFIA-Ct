@@ -15,6 +15,7 @@ dependencies = [
     "h5py>=3.9",
     "PyQt6>=6.5",
     "pyqtgraph>=0.13",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]

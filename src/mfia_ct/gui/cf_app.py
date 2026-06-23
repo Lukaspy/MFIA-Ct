@@ -825,16 +825,19 @@ class CfMainWindow(QMainWindow):
         self.queue_label = QLabel("Queue empty.")
         self.queue_list = QListWidget()
         self.queue_list.setMinimumHeight(90)
+        self.load_plan_btn = QPushButton("Load plan…")
         self.queue_add_btn = QPushButton("Add current config")
         queue_rm_btn = QPushButton("Remove")
         queue_clear_btn = QPushButton("Clear")
         self.run_queue_btn = QPushButton("Run queue ▶")
+        self.load_plan_btn.clicked.connect(self.load_plan_into_queue)
         self.queue_add_btn.clicked.connect(self.add_to_queue)
         queue_rm_btn.clicked.connect(self.remove_selected_from_queue)
         queue_clear_btn.clicked.connect(self.clear_queue)
         self.run_queue_btn.clicked.connect(self.run_queue)
         self.run_queue_btn.setEnabled(False)
         queue_btns = QHBoxLayout()
+        queue_btns.addWidget(self.load_plan_btn)
         queue_btns.addWidget(self.queue_add_btn)
         queue_btns.addWidget(queue_rm_btn)
         queue_btns.addWidget(queue_clear_btn)
@@ -1041,6 +1044,7 @@ class CfMainWindow(QMainWindow):
 
         self.controls.start_btn.setEnabled(False)
         self.controls.stop_btn.setEnabled(True)
+        self.load_plan_btn.setEnabled(False)
         self.queue_add_btn.setEnabled(False)
         self.run_queue_btn.setEnabled(False)
         self.instrument_panel.set_busy(True)
@@ -1096,6 +1100,7 @@ class CfMainWindow(QMainWindow):
         self._worker = None
         self.controls.start_btn.setEnabled(self.backend is not None)
         self.controls.stop_btn.setEnabled(False)
+        self.load_plan_btn.setEnabled(True)
         self.queue_add_btn.setEnabled(True)
         self.instrument_panel.set_busy(False)
         if self._running_queue:
@@ -1155,6 +1160,38 @@ class CfMainWindow(QMainWindow):
         return (
             f"{mode} · {axis} · {len(cfg.illumination)} illum steps ({wl}) · "
             f"{cfg.run.device_id or '?'}"
+        )
+
+    def load_plan_into_queue(self) -> None:
+        """Load a YAML measurement plan and append its campaigns to the queue.
+
+        The plan is self-contained (device, output folder, every block's axis +
+        illumination + timing), so a loaded queue is ready to run without
+        touching the controls. See docs/measurement-plan-format.md.
+        """
+        if self._thread is not None:
+            return
+        from ..cf_plan import PlanError, load_plan
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load measurement plan", "", "YAML plans (*.yaml *.yml);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            configs = load_plan(path)
+        except PlanError as e:
+            QMessageBox.critical(self, "Plan", f"Could not load plan:\n{e}")
+            return
+        for cfg in configs:
+            self._queue.append(cfg)
+            self.queue_list.addItem(
+                QListWidgetItem(f"{len(self._queue)}. {self._summarize(cfg)}")
+            )
+        self._refresh_queue_label()
+        self._update_queue_buttons()
+        self.status_label.setText(
+            f"Loaded {len(configs)} campaign(s) from {Path(path).name}."
         )
 
     def add_to_queue(self) -> None:
@@ -1308,6 +1345,7 @@ class CfMainWindow(QMainWindow):
 
         self.controls.start_btn.setEnabled(False)
         self.controls.stop_btn.setEnabled(True)
+        self.load_plan_btn.setEnabled(False)
         self.queue_add_btn.setEnabled(False)
         self.run_queue_btn.setEnabled(False)
         self.instrument_panel.set_busy(True)
