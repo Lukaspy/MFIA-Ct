@@ -317,6 +317,33 @@ def test_intensity_series_no_interleave() -> None:
     assert [s.intensity_pct for s in seq.steps] == [25.0, 100.0]
 
 
+def test_wavelength_intensity_matrix_covers_every_pair() -> None:
+    wls = [385.0, 530.0, 850.0]
+    pts = [10.0, 50.0, 100.0]
+    seq = IlluminationSequence.wavelength_intensity_matrix(wls, pts)
+
+    lit = [s for s in seq.steps if not s.is_dark]
+    # One lit step per (wavelength, intensity) pair.
+    assert len(lit) == len(wls) * len(pts)
+    assert {(s.wavelength_nm, s.intensity_pct) for s in lit} == {
+        (wl, pct) for wl in wls for pct in pts
+    }
+    # Grouped by wavelength, in the given order, each stepping intensity up.
+    assert [s.label for s in lit[:3]] == ["385nm_10pct", "385nm_50pct", "385nm_100pct"]
+    # dark_pre + a dark_post after every lit step (interleave default on).
+    assert seq.steps[0].label == "dark_pre"
+    assert sum(1 for s in seq.steps if s.is_dark) == 1 + len(lit)
+
+
+def test_wavelength_intensity_matrix_respects_order_and_no_interleave() -> None:
+    seq = IlluminationSequence.wavelength_intensity_matrix(
+        [850.0, 385.0], [50.0, 100.0], dark_pre=False, interleave_dark=False
+    )
+    # No dark steps; wavelength order preserved (IR first here).
+    assert all(not s.is_dark for s in seq.steps)
+    assert [s.wavelength_nm for s in seq.steps] == [850.0, 850.0, 385.0, 385.0]
+
+
 def test_intensity_series_runs_and_records_power() -> None:
     # End-to-end: a 470 nm intensity series should produce per-level sweeps
     # with optical_power_mw scaling with drive % (linear model in the mock).

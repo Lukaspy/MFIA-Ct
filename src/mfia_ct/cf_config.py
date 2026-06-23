@@ -232,6 +232,54 @@ class IlluminationSequence:
         return cls(steps=steps)
 
     @classmethod
+    def wavelength_intensity_matrix(
+        cls,
+        wavelengths_nm: list[float],
+        drive_points_pct: list[float],
+        *,
+        dark_pre: bool = True,
+        interleave_dark: bool = True,
+        light_settle_s: float = 30.0,
+        dark_settle_s: float = 60.0,
+    ) -> "IlluminationSequence":
+        """The full wavelength × intensity matrix — every wavelength stepped
+        through every drive level. This is ``intensity_series`` generalized to
+        several wavelengths: the complete action-spectrum-vs-flux campaign in
+        one sequence (run at a fixed bias, or under the C-V/C-f loop, which
+        repeats this whole plan at each bias / test frequency).
+
+        Dark is interleaved between lit steps by default (one ``dark_pre`` then
+        a ``dark_post`` after each level) so persistent photoconductivity
+        recovers before the next condition. Wavelength order is the measurement
+        order of ``wavelengths_nm`` as given (caller sorts/reverses to taste).
+        """
+        steps: list[IlluminationStep] = []
+        if dark_pre:
+            steps.append(
+                IlluminationStep("dark_pre", None, intensity_pct=0.0, settle_s=dark_settle_s)
+            )
+        for wl in wavelengths_nm:
+            for pct in drive_points_pct:
+                steps.append(
+                    IlluminationStep(
+                        f"{int(wl)}nm_{pct:g}pct",
+                        wl,
+                        intensity_pct=pct,
+                        settle_s=light_settle_s,
+                    )
+                )
+                if interleave_dark:
+                    steps.append(
+                        IlluminationStep(
+                            f"dark_post_{int(wl)}_{pct:g}pct",
+                            None,
+                            intensity_pct=0.0,
+                            settle_s=dark_settle_s,
+                        )
+                    )
+        return cls(steps=steps)
+
+    @classmethod
     def default_interleaved(cls) -> "IlluminationSequence":
         # Sweep UV→IR; canonical channel wiring (Ch0=850 … Ch7=385) is
         # handled by the driver's wavelength addressing, so order here is

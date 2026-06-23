@@ -240,9 +240,17 @@ class IlluminationEditor(QWidget):
         btns.addStretch()
         seq_layout.addLayout(btns)
 
-        # ---- Intensity-series tab (linearity check) ----
+        # ---- Intensity-series tab (linearity check + full λ × I matrix) ----
         isr = QWidget()
         isr_form = QFormLayout(isr)
+        self.isr_all_channels = QCheckBox(
+            "All checked channels (λ × intensity matrix)"
+        )
+        self.isr_all_channels.setToolTip(
+            "Step every wavelength ticked on the Channels tab through the drive\n"
+            "points below — the complete wavelength × intensity campaign. When\n"
+            "off, only the single wavelength selected here is stepped."
+        )
         self.isr_wavelength = QComboBox()
         for wl in DEFAULT_CHANNEL_WAVELENGTHS:
             self.isr_wavelength.addItem(f"{int(wl)} nm", userData=wl)
@@ -253,21 +261,27 @@ class IlluminationEditor(QWidget):
         self.isr_dark_settle.setSuffix(" s")
         self.isr_interleave_dark = QCheckBox("Interleave dark between levels")
         self.isr_interleave_dark.setChecked(True)
-        isr_build = QPushButton("Build series → Sequence")
+        isr_build = QPushButton("Build → Sequence")
         isr_build.clicked.connect(self._build_intensity_series)
         isr_form.addRow(
             QLabel(
-                "One wavelength stepped through drive levels, to test whether\n"
-                "the photo-response is linear in flux. Builds into the Sequence\n"
-                "tab; run it at a fixed bias."
+                "Step drive levels to test photo-response linearity in flux.\n"
+                "One wavelength, or tick 'All checked channels' for the full\n"
+                "wavelength × intensity matrix. Builds into the Sequence tab;\n"
+                "runs at each bias / test frequency under the C-f / C-V loop."
             )
         )
+        isr_form.addRow(self.isr_all_channels)
         isr_form.addRow("Wavelength", self.isr_wavelength)
         isr_form.addRow("Drive points (%)", self.isr_drive_points)
         isr_form.addRow("Lit settle", self.isr_light_settle)
         isr_form.addRow("Dark settle", self.isr_dark_settle)
         isr_form.addRow(self.isr_interleave_dark)
         isr_form.addRow(isr_build)
+        # The single-wavelength picker is irrelevant in matrix mode.
+        self.isr_all_channels.toggled.connect(
+            lambda on: self.isr_wavelength.setEnabled(not on)
+        )
 
         self._tabs = tabs
         self._seq_tab_index = 1
@@ -283,7 +297,6 @@ class IlluminationEditor(QWidget):
     def _build_intensity_series(self) -> None:
         from PyQt6.QtWidgets import QMessageBox
 
-        wl = self.isr_wavelength.currentData()
         try:
             pts = [float(p) for p in self.isr_drive_points.text().split(",") if p.strip()]
         except ValueError as e:
@@ -294,13 +307,31 @@ class IlluminationEditor(QWidget):
                 self, "Intensity series", "Need at least 2 drive points (e.g. 10,100)."
             )
             return
-        seq = IlluminationSequence.intensity_series(
-            wl,
-            pts,
-            interleave_dark=self.isr_interleave_dark.isChecked(),
-            light_settle_s=self.isr_light_settle.value(),
-            dark_settle_s=self.isr_dark_settle.value(),
-        )
+
+        if self.isr_all_channels.isChecked():
+            wavelengths = [wl for wl, cb, _pct in self.channel_rows if cb.isChecked()]
+            if not wavelengths:
+                QMessageBox.warning(
+                    self,
+                    "Intensity series",
+                    "Tick at least one wavelength on the Channels tab for the matrix.",
+                )
+                return
+            seq = IlluminationSequence.wavelength_intensity_matrix(
+                wavelengths,
+                pts,
+                interleave_dark=self.isr_interleave_dark.isChecked(),
+                light_settle_s=self.isr_light_settle.value(),
+                dark_settle_s=self.isr_dark_settle.value(),
+            )
+        else:
+            seq = IlluminationSequence.intensity_series(
+                self.isr_wavelength.currentData(),
+                pts,
+                interleave_dark=self.isr_interleave_dark.isChecked(),
+                light_settle_s=self.isr_light_settle.value(),
+                dark_settle_s=self.isr_dark_settle.value(),
+            )
         self.table.setRowCount(0)
         for s in seq.steps:
             self._add_row(s.label, s.wavelength_nm, s.intensity_pct, s.settle_s)
