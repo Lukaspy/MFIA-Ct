@@ -30,8 +30,12 @@ from typing import Callable, Iterator, Optional, Protocol
 
 import numpy as np
 
-from .cf_config import CfConfig, IlluminationStep
-from .cf_storage import SweepResult, make_metadata_from_config
+from .cf_config import CfConfig, IlluminationStep, SweepType
+from .cf_storage import (
+    SweepResult,
+    make_cv_metadata_from_config,
+    make_metadata_from_config,
+)
 from .led_source import LedSource
 
 
@@ -43,6 +47,15 @@ class _Backend(Protocol):
     def run_sweep(
         self,
         cfg,
+        *,
+        progress_cb: Optional[Callable[[float], None]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
+        light_active: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
+    def run_bias_sweep(
+        self,
+        cv,
+        fixed_freq_hz: float,
         *,
         progress_cb: Optional[Callable[[float], None]] = None,
         stop_check: Optional[Callable[[], bool]] = None,
@@ -97,50 +110,10 @@ class CfExperiment:
                 self.led.connect()
                 led_connected = True
 
-            for bi, bias in enumerate(self.cfg.bias.values_v):
-                if self._stopped():
-                    return
-                self.backend.set_dc_bias(bias)
-                self._sleeper(self.cfg.bias.bias_settle_s, self._stopped)
-                if self._stopped():
-                    return
-
-                for si, step in enumerate(self.cfg.illumination.steps):
-                    if self._stopped():
-                        return
-                    self._apply_illumination(step)
-                    self._sleeper(step.settle_s, self._stopped)
-                    if self._stopped():
-                        return
-
-                    def _per_point(frac: float, bi=bi, si=si) -> None:
-                        if self._progress_cb is not None:
-                            try:
-                                self._progress_cb(bi, si, frac)
-                            except Exception:
-                                pass
-
-                    freq, z_real, z_imag = self.backend.run_sweep(
-                        self.cfg.sweep,
-                        progress_cb=_per_point,
-                        stop_check=self._stopped,
-                        light_active=not step.is_dark,
-                    )
-                    current_ma = self._current_ma_for(step)
-                    power_mw = self._optical_power_for(step)
-                    meta = make_metadata_from_config(
-                        self.cfg,
-                        bias,
-                        step,
-                        led_current_ma=current_ma,
-                        optical_power_mw=power_mw,
-                    )
-                    yield SweepResult(
-                        frequency_hz=freq,
-                        z_real=z_real,
-                        z_imag=z_imag,
-                        metadata=meta,
-                    )
+            if self.cfg.sweep_type == SweepType.C_V:
+                yield from self._run_cv()
+            else:
+                yield from self._run_cf()
         finally:
             # Always: LEDs off, bias to 0, LED disconnect. Don't propagate
             # cleanup errors; they'd mask the original exception.
@@ -158,6 +131,104 @@ class CfExperiment:
                     self.led.disconnect()
                 except Exception:
                     pass
+
+    def _run_cf(self) -> Iterator[SweepResult]:
+        """C-f: bias outer, illumination inner, frequency the swept axis."""
+        for bi, bias in enumerate(self.cfg.bias.values_v):
+            if self._stopped():
+                return
+            self.backend.set_dc_bias(bias)
+            self._sleeper(self.cfg.bias.bias_settle_s, self._stopped)
+            if self._stopped():
+                return
+
+            for si, step in enumerate(self.cfg.illumination.steps):
+                if self._stopped():
+                    return
+                self._apply_illumination(step)
+                self._sleeper(step.settle_s, self._stopped)
+                if self._stopped():
+                    return
+
+                def _per_point(frac: float, bi=bi, si=si) -> None:
+                    if self._progress_cb is not None:
+                        try:
+                            self._progress_cb(bi, si, frac)
+                        except Exception:
+                            pass
+
+                freq, z_real, z_imag = self.backend.run_sweep(
+                    self.cfg.sweep,
+                    progress_cb=_per_point,
+                    stop_check=self._stopped,
+                    light_active=not step.is_dark,
+                )
+                meta = make_metadata_from_config(
+                    self.cfg,
+                    bias,
+                    step,
+                    led_current_ma=self._current_ma_for(step),
+                    optical_power_mw=self._optical_power_for(step),
+                )
+                yield SweepResult(
+                    frequency_hz=freq,
+                    z_real=z_real,
+                    z_imag=z_imag,
+                    metadata=meta,
+                )
+
+    def _run_cv(self) -> Iterator[SweepResult]:
+        """C-V: test-frequency outer, illumination inner, bias the swept axis.
+
+        The illumination sequence is the same "plan" as C-f, so dark-pre /
+        lit / dark-post runs at each frequency just as it does at each bias.
+        A single-entry ``cv_frequencies_hz`` is an ordinary single-frequency
+        C-V; multiple entries produce a C-V-f map.
+        """
+        for fi, freq in enumerate(self.cfg.cv_frequencies_hz):
+            if self._stopped():
+                return
+
+            for si, step in enumerate(self.cfg.illumination.steps):
+                if self._stopped():
+                    return
+                self._apply_illumination(step)
+                self._sleeper(step.settle_s, self._stopped)
+                if self._stopped():
+                    return
+
+                def _per_point(frac: float, fi=fi, si=si) -> None:
+                    if self._progress_cb is not None:
+                        try:
+                            self._progress_cb(fi, si, frac)
+                        except Exception:
+                            pass
+
+                bias_v, z_real, z_imag = self.backend.run_bias_sweep(
+                    self.cfg.cv_bias,
+                    float(freq),
+                    progress_cb=_per_point,
+                    stop_check=self._stopped,
+                    light_active=not step.is_dark,
+                )
+                meta = make_cv_metadata_from_config(
+                    self.cfg,
+                    float(freq),
+                    step,
+                    led_current_ma=self._current_ma_for(step),
+                    optical_power_mw=self._optical_power_for(step),
+                )
+                # frequency_hz broadcast to the bias grid so the Cp/Rp ω-math
+                # in SweepResult stays identical to the C-f path.
+                freq_arr = np.full(np.asarray(bias_v).shape, float(freq))
+                yield SweepResult(
+                    frequency_hz=freq_arr,
+                    z_real=z_real,
+                    z_imag=z_imag,
+                    bias_v=bias_v,
+                    sweep_type="C-V",
+                    metadata=meta,
+                )
 
     def _apply_illumination(self, step: IlluminationStep) -> None:
         if self.led is None:

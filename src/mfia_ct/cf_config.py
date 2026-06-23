@@ -33,6 +33,25 @@ class AmplitudeUnit(str, Enum):
     VPK = "V peak"
 
 
+class SweepType(str, Enum):
+    """Which axis the LabOne Sweeper steps for a campaign.
+
+    C_F: sweep frequency at each (bias, illumination) — classic impedance
+        spectroscopy. ``bias`` is the outer loop, ``sweep`` the swept axis.
+    C_V: sweep DC bias at each (test-frequency, illumination) — capacitance-
+        voltage. ``cv_frequencies_hz`` is the outer loop and ``cv_bias`` is
+        the swept axis (Sweeper gridnode = ``/imps/N/bias/value``). A single-
+        element frequency list is a classic single-frequency C-V; a multi-
+        element list is a C-V-f map for frequency-dispersion / trap work.
+
+    The illumination sequence is shared: it runs as the inner loop in both
+    modes, so the dark-pre / lit / dark-post "plan" carries over verbatim.
+    """
+
+    C_F = "C-f (sweep frequency)"
+    C_V = "C-V (sweep bias)"
+
+
 @dataclass
 class SweeperSettings:
     """LabOne Sweeper module parameters for one frequency sweep.
@@ -66,6 +85,48 @@ class SweeperSettings:
             return max(2, int(self.points_per_decade))
         decades = math.log10(self.stop_hz / self.start_hz)
         return max(2, int(round(decades * self.points_per_decade)) + 1)
+
+
+@dataclass
+class BiasSweepSettings:
+    """Swept DC-bias axis for a C-V measurement (Sweeper gridnode = bias).
+
+    Mirrors ``SweeperSettings`` but the grid is voltage, not frequency, and
+    linear spacing is the default (C-V curves are read on a linear V axis).
+    ``n_points`` is explicit — there's no per-decade concept on a bipolar,
+    zero-crossing voltage axis. Settling/averaging mean the same as in the
+    frequency sweep: at low test frequency each bias point still needs
+    several time constants to settle before it's measured, so a fine bias
+    sweep at 1 Hz is slow by the same arithmetic as a low-frequency C-f point.
+
+    The ±range is validated against the terminal-mode bias limit
+    (``TERMINAL_BIAS_LIMIT_V``) by the GUI before a run, same as the C-f
+    bias list.
+    """
+
+    start_v: float = -5.0
+    stop_v: float = 5.0
+    n_points: int = 101
+    log_spacing: bool = False
+    settling_tcs: float = 5.0
+    settling_inaccuracy: float = 0.01
+    averaging_samples: int = 1
+    averaging_time_s: float = 0.0
+    auto_bandwidth: bool = True
+    filter_order: int = 4
+
+    @property
+    def values_v(self) -> list[float]:
+        """The commanded bias points, for validation/preview (not the run —
+        the Sweeper generates its own grid from start/stop/n_points)."""
+        import numpy as np
+
+        n = max(2, int(self.n_points))
+        if self.log_spacing:
+            # Log spacing across a bipolar range is ill-defined; callers use
+            # linear for bias. Fall back to linear if someone sets it.
+            return list(np.linspace(self.start_v, self.stop_v, n))
+        return list(np.linspace(self.start_v, self.stop_v, n))
 
 
 @dataclass
@@ -225,8 +286,15 @@ class CfConfig:
         imp_index=0,
     ))
     amplitude_unit: AmplitudeUnit = AmplitudeUnit.VRMS
+    sweep_type: SweepType = SweepType.C_F
+    # C-f axis: swept frequency at each bias.
     sweep: SweeperSettings = field(default_factory=SweeperSettings)
     bias: BiasSequence = field(default_factory=BiasSequence)
+    # C-V axis: swept bias at each fixed test frequency. cv_frequencies_hz is
+    # the outer loop — one entry is a single-frequency C-V, several entries a
+    # C-V-f map. Ignored when sweep_type is C_F (and vice-versa for sweep/bias).
+    cv_frequencies_hz: list[float] = field(default_factory=lambda: [100_000.0])
+    cv_bias: BiasSweepSettings = field(default_factory=BiasSweepSettings)
     illumination: IlluminationSequence = field(
         default_factory=IlluminationSequence.default_interleaved
     )

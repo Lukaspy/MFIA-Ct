@@ -15,7 +15,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from .acquisition import StreamChunk
-from .cf_config import CfConfig, SweeperSettings
+from .cf_config import BiasSweepSettings, CfConfig, SweeperSettings
 from .config import CtConfig
 
 
@@ -231,3 +231,59 @@ class MockMFIA:
         noise_real = self._rng.normal(0, 0.001, n) * np.abs(z)
         noise_imag = self._rng.normal(0, 0.001, n) * np.abs(z)
         return freq, z.real + noise_real, z.imag + noise_imag
+
+    def run_bias_sweep(
+        self,
+        cv: BiasSweepSettings,
+        fixed_freq_hz: float,
+        *,
+        progress_cb: Optional[Callable[[float], None]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
+        light_active: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Synthesize a Mott-Schottky-like C-V curve at one fixed frequency.
+
+        Depletion capacitance falls under reverse bias and rises toward the
+        built-in potential: C(V) = C0 / sqrt(1 − V/Vbi), clamped. A diode-like
+        leakage conductance grows in forward bias; ``light_active`` multiplies
+        it (the photoconductive-shunt effect the C-f mock also models — light
+        primarily modulates R, not C). At low ``fixed_freq_hz`` and forward
+        bias the leakage dominates, the phase collapses toward 0°, and the
+        extracted C goes unreliable — which is exactly what the GUI's
+        loss-tangent flag should catch.
+        """
+        n = max(2, int(cv.n_points))
+        bias = np.linspace(cv.start_v, cv.stop_v, n)
+        omega = 2.0 * math.pi * float(fixed_freq_hz)
+
+        vbi = 0.8  # built-in potential (V)
+        c0 = 1e-9  # 1 nF zero-bias depletion capacitance
+        c_min = 50e-12
+        c_max = 20e-9
+        # 1 − V/Vbi, floored so it stays positive past the built-in potential.
+        arg = np.clip(1.0 - bias / vbi, 0.05, None)
+        cdep = np.clip(c0 / np.sqrt(arg), c_min, c_max)
+
+        # Leakage: a small baseline shunt plus a forward-bias term. Light adds
+        # a photoconductive shunt (×50) so lit curves show higher loss.
+        g = 1e-7 + 1e-6 * np.clip(bias, 0.0, None)
+        if light_active:
+            g = g * 50.0
+
+        y = g + 1j * omega * cdep
+        z = 1.0 / y
+
+        # Simulate sweep time so progress/stop behave like the real sweeper.
+        t_per_point = 0.005
+        for i in range(n):
+            time.sleep(t_per_point)
+            if progress_cb is not None and (i % max(1, n // 20) == 0):
+                progress_cb((i + 1) / n)
+            if stop_check is not None and stop_check():
+                return bias[: i + 1], z.real[: i + 1], z.imag[: i + 1]
+        if progress_cb is not None:
+            progress_cb(1.0)
+
+        noise_real = self._rng.normal(0, 0.001, n) * np.abs(z)
+        noise_imag = self._rng.normal(0, 0.001, n) * np.abs(z)
+        return bias, z.real + noise_real, z.imag + noise_imag

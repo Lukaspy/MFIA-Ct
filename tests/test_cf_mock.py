@@ -23,16 +23,19 @@ import numpy as np
 from mfia_ct.cf_config import (
     AmplitudeUnit,
     BiasSequence,
+    BiasSweepSettings,
     CfConfig,
     IlluminationSequence,
     IlluminationStep,
     RunMetadata,
     SweeperSettings,
+    SweepType,
 )
 from mfia_ct.cf_experiment import CfExperiment
 from mfia_ct.cf_storage import (
     CSV_COLUMNS,
     SweepResult,
+    make_cv_metadata_from_config,
     make_filename,
     make_metadata_from_config,
     write_sweep_csv,
@@ -332,6 +335,133 @@ def test_intensity_series_runs_and_records_power() -> None:
     powers = [r.metadata.optical_power_mw for r in results]
     # 25/50/100 % of 8 mW → 2, 4, 8 mW, strictly increasing.
     assert powers == pytest.approx([2.0, 4.0, 8.0])
+
+
+# --- C-V mode -----------------------------------------------------------------
+
+
+def _fast_cv_cfg(*, with_light: bool = True, frequencies=(1000.0, 10000.0)) -> CfConfig:
+    """Minimal C-V CfConfig that runs quickly under the mock backend."""
+    illum_steps: list[IlluminationStep] = [
+        IlluminationStep("dark_pre", None, intensity_pct=0.0, settle_s=0.0),
+    ]
+    if with_light:
+        illum_steps.append(
+            IlluminationStep("470nm", 470.0, intensity_pct=100.0, settle_s=0.0)
+        )
+        illum_steps.append(
+            IlluminationStep("dark_post_470", None, intensity_pct=0.0, settle_s=0.0)
+        )
+    cfg = CfConfig(
+        sweep_type=SweepType.C_V,
+        cv_frequencies_hz=list(frequencies),
+        cv_bias=BiasSweepSettings(start_v=-2.0, stop_v=2.0, n_points=5, settling_tcs=1.0),
+        illumination=IlluminationSequence(steps=illum_steps),
+        run=RunMetadata(device_id="MOCK01", substrate_type="p-Si"),
+    )
+    cfg.ia.ac_amplitude_v = 0.030
+    return cfg
+
+
+def test_cv_loop_order_and_count() -> None:
+    cfg = _fast_cv_cfg()  # 2 freqs × 3 steps
+    led = MockLedSource()
+    exp = CfExperiment(MockMFIA(), cfg, led=led, sleeper=_no_sleep)
+    results = list(exp.run())
+    assert len(results) == 6
+    # Frequency outer, illumination inner.
+    freqs = [r.metadata.fixed_frequency_hz for r in results]
+    assert freqs == [1000.0, 1000.0, 1000.0, 10000.0, 10000.0, 10000.0]
+    labels = [r.metadata.illumination_label for r in results]
+    assert labels == [
+        "dark_pre", "470nm", "dark_post_470",
+        "dark_pre", "470nm", "dark_post_470",
+    ]
+    # All sweeps are tagged C-V and carry NaN commanded bias (bias is swept).
+    assert all(r.metadata.sweep_type == "C-V" for r in results)
+    assert all(math.isnan(r.metadata.bias_v_commanded) for r in results)
+
+
+def test_cv_result_axes() -> None:
+    cfg = _fast_cv_cfg(with_light=False, frequencies=(5000.0,))
+    exp = CfExperiment(MockMFIA(), cfg, led=None, sleeper=_no_sleep)
+    result = next(iter(exp.run()))
+    # Swept axis is bias, of length n_points spanning the range.
+    assert result.x_is_bias
+    assert result.sweep_type == "C-V"
+    assert len(result.bias_v) == cfg.cv_bias.n_points
+    assert np.isclose(result.bias_v[0], -2.0) and np.isclose(result.bias_v[-1], 2.0)
+    # frequency_hz is the held test frequency broadcast to every point.
+    assert result.frequency_hz.shape == result.bias_v.shape
+    assert np.allclose(result.frequency_hz, 5000.0)
+    # x_values returns the bias axis for plotting.
+    assert np.allclose(result.x_values, result.bias_v)
+    # Depletion capacitance is positive and finite.
+    cp, _rp = result.cp_rp
+    assert np.all(np.isfinite(cp)) and np.all(cp > 0)
+
+
+def test_cv_csv_roundtrip(tmp_path: Path) -> None:
+    cfg = _fast_cv_cfg(with_light=False, frequencies=(1000.0,))
+    exp = CfExperiment(MockMFIA(), cfg, led=None, sleeper=_no_sleep)
+    result = next(iter(exp.run()))
+    path = tmp_path / make_filename(result.metadata)
+    write_sweep_csv(result, path)
+
+    # Filename pattern: MFIA_CV_<device>_f<freq>_<illum>_<stamp>.csv
+    assert path.name.startswith("MFIA_CV_MOCK01_f1kHz_dark_pre_")
+
+    text = path.read_text().splitlines()
+    metadata_lines = [ln for ln in text if ln.startswith("#")]
+    data_lines = [ln for ln in text if not ln.startswith("#")]
+    assert any("sweep_type: C-V" in ln for ln in metadata_lines)
+    assert any("fixed_frequency_hz: 1000.0" in ln for ln in metadata_lines)
+    # No bias_v_commanded line for C-V (bias is swept, not held).
+    assert not any("bias_v_commanded:" in ln for ln in metadata_lines)
+
+    reader = csv.reader(data_lines)
+    header = next(reader)
+    assert header == CSV_COLUMNS
+    assert "bias_v" in header
+    rows = list(reader)
+    assert len(rows) == cfg.cv_bias.n_points
+    bias_idx = CSV_COLUMNS.index("bias_v")
+    freq_idx = CSV_COLUMNS.index("frequency_hz")
+    bias_col = [float(r[bias_idx]) for r in rows]
+    freq_col = [float(r[freq_idx]) for r in rows]
+    # Bias varies across the file; frequency is constant.
+    assert math.isclose(bias_col[0], -2.0, abs_tol=1e-6)
+    assert math.isclose(bias_col[-1], 2.0, abs_tol=1e-6)
+    assert all(math.isclose(f, 1000.0, rel_tol=1e-6) for f in freq_col)
+
+
+def test_cv_metadata_marks_swept_bias() -> None:
+    cfg = _fast_cv_cfg(with_light=False)
+    step = cfg.illumination.steps[0]
+    meta = make_cv_metadata_from_config(cfg, 2500.0, step)
+    assert meta.sweep_type == "C-V"
+    assert meta.fixed_frequency_hz == 2500.0
+    assert math.isnan(meta.bias_v_commanded)
+    # Amplitude conversion still applies.
+    assert math.isclose(meta.amplitude_vrms, 0.030)
+    assert math.isclose(meta.amplitude_vpk, 0.030 * math.sqrt(2.0), rel_tol=1e-9)
+
+
+def test_cv_refuses_light_without_led() -> None:
+    cfg = _fast_cv_cfg(with_light=True)
+    exp = CfExperiment(MockMFIA(), cfg, led=None, sleeper=_no_sleep)
+    with pytest.raises(RuntimeError):
+        list(exp.run())
+
+
+def test_bias_sweep_settings_values() -> None:
+    s = BiasSweepSettings(start_v=-5.0, stop_v=5.0, n_points=11)
+    vals = s.values_v
+    assert len(vals) == 11
+    assert vals[0] == -5.0 and vals[-1] == 5.0
+    # Default is the ±5 V, 101-point linear C-V matrix.
+    d = BiasSweepSettings()
+    assert d.n_points == 101 and not d.log_spacing
 
 
 def test_progress_callback_fires_with_indices() -> None:

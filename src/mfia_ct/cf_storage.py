@@ -40,6 +40,9 @@ CSV_COLUMNS = [
     "rs_ohm",
     "re_z_ohm",
     "im_z_ohm",
+    # Trailing so existing column positions are unchanged for the C-f loader.
+    # Constant down a C-f file (the commanded bias); the swept axis for C-V.
+    "bias_v",
 ]
 
 
@@ -49,7 +52,7 @@ class SweepMetadata:
 
     device_id: str
     substrate_type: str
-    bias_v_commanded: float
+    bias_v_commanded: float  # the held bias for C-f; NaN for C-V (bias is swept)
     illumination_label: str  # e.g. "dark_pre", "385nm", "dark_post_385"
     wavelength_nm: float  # 0 for dark
     led_intensity_pct: Optional[float]  # commanded drive %, None for dark
@@ -63,17 +66,40 @@ class SweepMetadata:
     # native commanded value for this hardware.
     led_current_ma: Optional[float] = None
     optical_power_mw: Optional[float] = None  # measured separately; null if not entered
+    sweep_type: str = "C-f"  # "C-f" (swept freq) or "C-V" (swept bias)
+    fixed_frequency_hz: Optional[float] = None  # the held test frequency for C-V
 
 
 @dataclass
 class SweepResult:
-    """Raw output of one frequency sweep, before CSV serialization."""
+    """Raw output of one sweep, before CSV serialization.
+
+    ``frequency_hz`` is always an array: for C-f it is the swept axis; for
+    C-V it is the fixed test frequency broadcast to every point, so the
+    Cp/Rp/Cs/Rs ω-math below is identical in both modes. ``bias_v`` is the
+    swept axis for C-V (and None for C-f, where bias is the constant in
+    ``metadata.bias_v_commanded``).
+    """
 
     frequency_hz: np.ndarray
     z_real: np.ndarray
     z_imag: np.ndarray
     metadata: SweepMetadata
+    bias_v: Optional[np.ndarray] = None
+    sweep_type: str = "C-f"
     extra: dict = field(default_factory=dict)
+
+    @property
+    def x_is_bias(self) -> bool:
+        """True when the swept (plot) axis is bias, i.e. this is a C-V sweep."""
+        return self.sweep_type == "C-V" and self.bias_v is not None
+
+    @property
+    def x_values(self) -> np.ndarray:
+        """The swept axis: bias (V) for C-V, frequency (Hz) for C-f."""
+        if self.x_is_bias:
+            return np.asarray(self.bias_v, dtype=float)
+        return np.asarray(self.frequency_hz, dtype=float)
 
     @property
     def z_mag(self) -> np.ndarray:
@@ -133,12 +159,25 @@ def _fmt_bias(bias_v: float) -> str:
     return f"{sign}{s}"
 
 
+def _fmt_freq(hz: float) -> str:
+    """Frequency for a filename: compact SI, no spaces — 1e5 → 100kHz."""
+    if hz >= 1e6:
+        return f"{hz / 1e6:g}MHz"
+    if hz >= 1e3:
+        return f"{hz / 1e3:g}kHz"
+    return f"{hz:g}Hz"
+
+
 def make_filename(meta: SweepMetadata, ts: Optional[datetime] = None) -> str:
     when = ts or datetime.fromisoformat(meta.timestamp)
     stamp = when.strftime("%Y%m%d_%H%M%S")
-    bias = _fmt_bias(meta.bias_v_commanded)
     device = meta.device_id or "unknown"
     illum = meta.illumination_label or "unknown"
+    if meta.sweep_type == "C-V":
+        # C-V files key on the held test frequency (bias is the swept axis).
+        freq = _fmt_freq(meta.fixed_frequency_hz or 0.0)
+        return f"MFIA_CV_{device}_f{freq}_{illum}_{stamp}.csv"
+    bias = _fmt_bias(meta.bias_v_commanded)
     return f"MFIA_Cf_{device}_Vb{bias}_{illum}_{stamp}.csv"
 
 
@@ -150,10 +189,16 @@ def make_metadata_from_config(
     timestamp: Optional[datetime] = None,
     optical_power_mw: Optional[float] = None,
     led_current_ma: Optional[float] = None,
+    sweep_type: str = "C-f",
+    fixed_frequency_hz: Optional[float] = None,
 ) -> SweepMetadata:
     """Bundle CfConfig + the active (bias, illumination) into a flat metadata
     record. Convenient single source of truth for both the filename and
     the CSV header block.
+
+    For C-f, ``bias_v`` is the held bias and ``fixed_frequency_hz`` is None.
+    For C-V, pass ``sweep_type="C-V"`` with ``bias_v=nan`` (bias is swept) and
+    ``fixed_frequency_hz`` set to the held test frequency.
     """
     when = (timestamp or datetime.now()).isoformat(timespec="seconds")
     vrms = cfg.ia.ac_amplitude_v  # CfConfig stores this in V RMS by convention
@@ -170,6 +215,31 @@ def make_metadata_from_config(
         notes=cfg.run.notes,
         led_current_ma=led_current_ma,
         optical_power_mw=optical_power_mw,
+        sweep_type=sweep_type,
+        fixed_frequency_hz=fixed_frequency_hz,
+    )
+
+
+def make_cv_metadata_from_config(
+    cfg: CfConfig,
+    fixed_freq_hz: float,
+    step: IlluminationStep,
+    *,
+    timestamp: Optional[datetime] = None,
+    optical_power_mw: Optional[float] = None,
+    led_current_ma: Optional[float] = None,
+) -> SweepMetadata:
+    """C-V metadata: bias is the swept axis, so ``bias_v_commanded`` is NaN and
+    the held test frequency is recorded in ``fixed_frequency_hz``."""
+    return make_metadata_from_config(
+        cfg,
+        float("nan"),
+        step,
+        timestamp=timestamp,
+        optical_power_mw=optical_power_mw,
+        led_current_ma=led_current_ma,
+        sweep_type="C-V",
+        fixed_frequency_hz=fixed_freq_hz,
     )
 
 
@@ -180,13 +250,25 @@ def write_sweep_csv(result: SweepResult, path: Path | str) -> Path:
     cp, rp = result.cp_rp
     cs, rs = result.cs_rs
     g, b = result.admittance
+    # Per-row bias: the swept axis for C-V, the constant commanded bias for C-f.
+    if result.bias_v is not None:
+        bias_col = np.asarray(result.bias_v, dtype=float)
+    else:
+        bias_col = np.full(
+            result.frequency_hz.shape, result.metadata.bias_v_commanded, dtype=float
+        )
 
     with out.open("w", newline="") as f:
         # Commented metadata block — easy for both humans and the loader.
         meta = result.metadata
         f.write(f"# device_id: {meta.device_id}\n")
         f.write(f"# substrate_type: {meta.substrate_type}\n")
-        f.write(f"# bias_v_commanded: {meta.bias_v_commanded}\n")
+        f.write(f"# sweep_type: {meta.sweep_type}\n")
+        if meta.sweep_type == "C-V":
+            # Bias is the swept axis; the held test frequency is the identifier.
+            f.write(f"# fixed_frequency_hz: {meta.fixed_frequency_hz}\n")
+        else:
+            f.write(f"# bias_v_commanded: {meta.bias_v_commanded}\n")
         f.write(f"# illumination_label: {meta.illumination_label}\n")
         f.write(f"# wavelength_nm: {meta.wavelength_nm}\n")
         pct = "none" if meta.led_intensity_pct is None else meta.led_intensity_pct
@@ -217,6 +299,7 @@ def write_sweep_csv(result: SweepResult, path: Path | str) -> Path:
                     f"{rs[i]:.9g}",
                     f"{result.z_real[i]:.9g}",
                     f"{result.z_imag[i]:.9g}",
+                    f"{bias_col[i]:.9g}",
                 ]
             )
     return out

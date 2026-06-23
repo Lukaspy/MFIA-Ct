@@ -15,7 +15,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 
 from .acquisition import StreamChunk
-from .cf_config import CfConfig, SweeperSettings
+from .cf_config import BiasSweepSettings, CfConfig, SweeperSettings
 from .config import CtConfig, EquivCircuit, TerminalMode
 
 # Equivalent-circuit selectors as exposed by /dev/imps/N/model.
@@ -214,7 +214,75 @@ class MFIA:
         sweeper.set("averaging/time", float(cfg.averaging_time_s))
         sweeper.set("order", int(cfg.filter_order))
 
-        sample_path = f"/{dev}/imps/0/sample"
+        return self._execute_sweeper(
+            sweeper, progress_cb=progress_cb, stop_check=stop_check
+        )
+
+    def run_bias_sweep(
+        self,
+        cv: BiasSweepSettings,
+        fixed_freq_hz: float,
+        *,
+        progress_cb: Optional[Callable[[float], None]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
+        light_active: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Run one C-V sweep: step DC bias at a fixed test frequency.
+
+        Holds ``/imps/0/freq`` at ``fixed_freq_hz`` and points the Sweeper's
+        ``gridnode`` at ``/imps/0/bias/value`` so it steps the DC bias from
+        ``cv.start_v`` to ``cv.stop_v``. Returns ``(bias_v, z_real, z_imag)``.
+        Identical settling/averaging machinery to ``run_sweep`` — only the
+        swept node and the held frequency differ. ``light_active`` is accepted
+        for signature parity with the mock (real optical state is physical).
+        """
+        if self.daq is None:
+            raise RuntimeError("MFIA.connect() must be called first")
+        dev = self.device
+
+        # Hold the test frequency fixed and make sure the bias output is on, so
+        # the Sweeper's grid writes actually move the DC bias.
+        self.daq.set(
+            [
+                (f"/{dev}/imps/0/freq", float(fixed_freq_hz)),
+                (f"/{dev}/imps/0/bias/enable", 1),
+            ]
+        )
+        self.daq.sync()
+
+        sweeper = self.daq.sweep()
+        sweeper.set("device", dev)
+        sweeper.set("gridnode", f"/{dev}/imps/0/bias/value")
+        sweeper.set("start", cv.start_v)
+        sweeper.set("stop", cv.stop_v)
+        sweeper.set("samplecount", max(2, int(cv.n_points)))
+        sweeper.set("xmapping", 1 if cv.log_spacing else 0)
+        sweeper.set("bandwidthcontrol", 2 if cv.auto_bandwidth else 0)
+        sweeper.set("settling/tc", float(cv.settling_tcs))
+        sweeper.set("settling/inaccuracy", float(cv.settling_inaccuracy))
+        sweeper.set("averaging/sample", int(cv.averaging_samples))
+        sweeper.set("averaging/time", float(cv.averaging_time_s))
+        sweeper.set("order", int(cv.filter_order))
+
+        return self._execute_sweeper(
+            sweeper, progress_cb=progress_cb, stop_check=stop_check
+        )
+
+    def _execute_sweeper(
+        self,
+        sweeper: Any,
+        *,
+        progress_cb: Optional[Callable[[float], None]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Run a configured Sweeper module to completion and unpack its data.
+
+        Shared by ``run_sweep`` (gridnode = freq) and ``run_bias_sweep``
+        (gridnode = bias): subscribes to the IA sample, polls ``finished()``
+        while reporting progress and honouring ``stop_check``, then returns
+        ``(grid, z_real, z_imag)`` where ``grid`` is whichever axis was swept.
+        """
+        sample_path = f"/{self.device}/imps/0/sample"
         sweeper.subscribe(sample_path)
         try:
             sweeper.execute()
@@ -253,14 +321,14 @@ class MFIA:
             raise RuntimeError("Sweeper returned empty sweep block")
         block = sweeps[0][0]
 
-        freq = np.asarray(block.get("grid", block.get("frequency", [])), dtype=float)
+        grid = np.asarray(block.get("grid", block.get("frequency", [])), dtype=float)
         z_real = np.asarray(block.get("realz", []), dtype=float)
         z_imag = np.asarray(block.get("imagz", []), dtype=float)
-        if freq.size == 0 or z_real.size != freq.size or z_imag.size != freq.size:
+        if grid.size == 0 or z_real.size != grid.size or z_imag.size != grid.size:
             raise RuntimeError(
                 "Sweeper data malformed — expected matching grid/realz/imagz arrays"
             )
-        return freq, z_real, z_imag
+        return grid, z_real, z_imag
 
     def set_aux_out(self, channel: int, value_v: float) -> None:
         if self.daq is None:

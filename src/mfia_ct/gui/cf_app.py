@@ -46,6 +46,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QStackedWidget,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -57,11 +58,13 @@ from PyQt6.QtWidgets import (
 from ..cf_config import (
     AmplitudeUnit,
     BiasSequence,
+    BiasSweepSettings,
     CfConfig,
     IlluminationSequence,
     IlluminationStep,
     RunMetadata,
     SweeperSettings,
+    SweepType,
 )
 from ..cf_experiment import CfExperiment
 from ..cf_storage import SweepResult, make_filename, write_sweep_csv
@@ -83,17 +86,25 @@ LedFactory = Callable[[], object]
 DEFAULT_CHANNEL_WAVELENGTHS = [385.0, 470.0, 505.0, 530.0, 590.0, 625.0, 740.0, 850.0]
 
 
+# Minimum width for numeric entry boxes. Without it, form layouts under some
+# Qt styles shrink spin boxes to a cramped size-hint that clips the value and
+# its suffix against the stepper arrows (e.g. "30.0 s").
+_SPIN_MIN_WIDTH = 120
+
+
 def _spin(value: float, lo: float, hi: float, step: float, decimals: int = 6) -> QDoubleSpinBox:
     s = QDoubleSpinBox()
     s.setRange(lo, hi)
     s.setDecimals(decimals)
     s.setSingleStep(step)
     s.setValue(value)
+    s.setMinimumWidth(_SPIN_MIN_WIDTH)
     return s
 
 
 def _int_spin(value: int, lo: int, hi: int) -> QSpinBox:
     s = QSpinBox()
+    s.setMinimumWidth(_SPIN_MIN_WIDTH)
     s.setRange(lo, hi)
     s.setValue(value)
     return s
@@ -388,6 +399,15 @@ class CfControlPanel(QWidget):
         super().__init__()
         layout = QVBoxLayout(self)
 
+        # ---- Sweep type ----
+        st_box = QGroupBox("Measurement")
+        st_form = QFormLayout(st_box)
+        self.sweep_type = QComboBox()
+        for st in SweepType:
+            self.sweep_type.addItem(st.value, userData=st)
+        st_form.addRow("Sweep type", self.sweep_type)
+        layout.addWidget(st_box)
+
         # ---- IA group ----
         ia = QGroupBox("Impedance Analyzer")
         ia_form = QFormLayout(ia)
@@ -412,7 +432,12 @@ class CfControlPanel(QWidget):
         ia_form.addRow("Terminal mode", self.terminal_mode)
         layout.addWidget(ia)
 
-        # ---- Sweeper group ----
+        # ---- Swept-axis controls: C-f and C-V pages swap by sweep type ----
+        # C-f page: frequency sweep + the coarse bias-point list.
+        cf_page = QWidget()
+        cf_layout = QVBoxLayout(cf_page)
+        cf_layout.setContentsMargins(0, 0, 0, 0)
+
         sw = QGroupBox("Frequency sweep")
         sw_form = QFormLayout(sw)
         self.start_hz = _spin(0.01, 1e-4, 5e6, 0.1, decimals=6)
@@ -429,17 +454,52 @@ class CfControlPanel(QWidget):
         sw_form.addRow("Settle (TCs)", self.settling_tcs)
         sw_form.addRow(self.log_spacing)
         sw_form.addRow(self.auto_bw)
-        layout.addWidget(sw)
+        cf_layout.addWidget(sw)
 
-        # ---- Bias list group ----
-        bias = QGroupBox("Bias sweep")
+        bias = QGroupBox("Bias points (C-f)")
         bias_form = QFormLayout(bias)
         self.bias_list = QLineEdit("-5,-4,-2,-1,0,1,2,4,5")
         self.bias_settle = _spin(90.0, 0.0, 7200.0, 5.0, decimals=1)
         self.bias_settle.setSuffix(" s")
         bias_form.addRow("Values (V)", self.bias_list)
         bias_form.addRow("Settle per bias", self.bias_settle)
-        layout.addWidget(bias)
+        cf_layout.addWidget(bias)
+
+        # C-V page: test-frequency list (outer loop) + swept bias axis.
+        cv_page = QWidget()
+        cv_layout = QVBoxLayout(cv_page)
+        cv_layout.setContentsMargins(0, 0, 0, 0)
+
+        cvf = QGroupBox("Test frequencies (C-V)")
+        cvf_form = QFormLayout(cvf)
+        self.cv_freqs = QLineEdit("100000")
+        self.cv_freqs.setToolTip(
+            "One frequency = single-frequency C-V; a comma-separated list "
+            "steps through each (a C-V-f map)."
+        )
+        cvf_form.addRow("Frequencies (Hz)", self.cv_freqs)
+        cv_layout.addWidget(cvf)
+
+        cvb = QGroupBox("Bias sweep (C-V)")
+        cvb_form = QFormLayout(cvb)
+        self.cv_start = _spin(-5.0, -10.0, 10.0, 0.1, decimals=3)
+        self.cv_stop = _spin(5.0, -10.0, 10.0, 0.1, decimals=3)
+        self.cv_points = _int_spin(101, 2, 2001)
+        self.cv_settling_tcs = _spin(5.0, 0.5, 50.0, 0.5, decimals=2)
+        self.cv_auto_bw = QCheckBox("Auto bandwidth")
+        self.cv_auto_bw.setChecked(True)
+        cvb_form.addRow("Start (V)", self.cv_start)
+        cvb_form.addRow("Stop (V)", self.cv_stop)
+        cvb_form.addRow("Points", self.cv_points)
+        cvb_form.addRow("Settle (TCs)", self.cv_settling_tcs)
+        cvb_form.addRow(self.cv_auto_bw)
+        cv_layout.addWidget(cvb)
+
+        self.swept_stack = QStackedWidget()
+        self.swept_stack.addWidget(cf_page)  # index 0 → C_F
+        self.swept_stack.addWidget(cv_page)  # index 1 → C_V
+        layout.addWidget(self.swept_stack)
+        self.sweep_type.currentIndexChanged.connect(self.swept_stack.setCurrentIndex)
 
         # ---- Illumination editor ----
         illum_box = QGroupBox("Illumination sequence")
@@ -518,11 +578,15 @@ class CfControlPanel(QWidget):
             self.led_bitfile.setText(path)
 
     def parse_bias_list(self) -> list[float]:
-        raw = self.bias_list.text().strip()
-        if not raw:
-            return []
+        return self._parse_float_list(self.bias_list.text())
+
+    def parse_cv_frequencies(self) -> list[float]:
+        return self._parse_float_list(self.cv_freqs.text())
+
+    @staticmethod
+    def _parse_float_list(raw: str) -> list[float]:
         out: list[float] = []
-        for piece in raw.split(","):
+        for piece in raw.strip().split(","):
             piece = piece.strip()
             if piece:
                 out.append(float(piece))
@@ -540,8 +604,18 @@ class CfControlPanel(QWidget):
         else:
             amp_rms = amp_value
 
+        sweep_type = self.sweep_type.currentData()
+        cv_freqs = self.parse_cv_frequencies()
+
+        # Initial IA frequency: the sweeper drives it for C-f, and run_bias_sweep
+        # holds the first test frequency for C-V — so seed it sensibly per mode.
+        if sweep_type == SweepType.C_V:
+            init_freq = cv_freqs[0] if cv_freqs else 100_000.0
+        else:
+            init_freq = self.start_hz.value()
+
         ia = IASettings(
-            frequency_hz=self.start_hz.value(),  # placeholder; sweeper drives freq
+            frequency_hz=init_freq,
             ac_amplitude_v=amp_rms,
             dc_bias_v=0.0,  # set per bias by CfExperiment
             equiv_circuit=EquivCircuit(self.equiv.currentText()),
@@ -560,6 +634,13 @@ class CfControlPanel(QWidget):
             values_v=self.parse_bias_list(),
             bias_settle_s=self.bias_settle.value(),
         )
+        cv_bias = BiasSweepSettings(
+            start_v=self.cv_start.value(),
+            stop_v=self.cv_stop.value(),
+            n_points=self.cv_points.value(),
+            settling_tcs=self.cv_settling_tcs.value(),
+            auto_bandwidth=self.cv_auto_bw.isChecked(),
+        )
         # The Sequence-tab table wins if the user has touched it; otherwise
         # build from the Channels tab.
         illum = self.illum_editor.read_table_sequence()
@@ -572,8 +653,11 @@ class CfControlPanel(QWidget):
         return CfConfig(
             ia=ia,
             amplitude_unit=unit,
+            sweep_type=sweep_type,
             sweep=sweep,
             bias=bias,
+            cv_frequencies_hz=cv_freqs,
+            cv_bias=cv_bias,
             illumination=illum,
             run=run,
         )
@@ -625,8 +709,12 @@ class CfMainWindow(QMainWindow):
         self.ph_plot.setXLink(self.z_plot)
         self._traces_z: list[pg.PlotDataItem] = []
         self._traces_ph: list[pg.PlotDataItem] = []
+        self._suspect_items: list[pg.PlotDataItem] = []
         self._current_z: pg.PlotDataItem | None = None
         self._current_ph: pg.PlotDataItem | None = None
+        # Plot mode state, set at Start from the active config.
+        self._plot_is_cv = False
+        self._plot_equiv: EquivCircuit = EquivCircuit.CP_RP
 
         # ---- Status + progress ----
         self.progress_bias = QProgressBar()
@@ -716,9 +804,21 @@ class CfMainWindow(QMainWindow):
         except ValueError as e:
             QMessageBox.critical(self, "Config", f"Invalid input:\n{e}")
             return
-        if not cfg.bias.values_v:
-            QMessageBox.warning(self, "Config", "Bias list is empty.")
-            return
+        is_cv = cfg.sweep_type == SweepType.C_V
+        if is_cv:
+            if not cfg.cv_frequencies_hz:
+                QMessageBox.warning(self, "Config", "Enter at least one test frequency.")
+                return
+            if cfg.cv_bias.n_points < 2:
+                QMessageBox.warning(self, "Config", "C-V needs at least 2 bias points.")
+                return
+            if cfg.cv_bias.start_v == cfg.cv_bias.stop_v:
+                QMessageBox.warning(self, "Config", "C-V bias start and stop are equal.")
+                return
+        else:
+            if not cfg.bias.values_v:
+                QMessageBox.warning(self, "Config", "Bias list is empty.")
+                return
         if not cfg.illumination.steps:
             QMessageBox.warning(self, "Config", "Illumination sequence is empty.")
             return
@@ -732,9 +832,14 @@ class CfMainWindow(QMainWindow):
         # Bias-range guard: the MFIA hard-limits DC bias by terminal mode
         # (±3 V in 4-terminal, ±10 V in 2-terminal). Out-of-range points would
         # be silently clamped on hardware, producing mislabeled data — warn
-        # before a long campaign rather than after.
+        # before a long campaign rather than after. For C-V the swept range's
+        # endpoints are what can exceed the limit.
         limit = TERMINAL_BIAS_LIMIT_V[cfg.ia.terminal_mode]
-        over = [b for b in cfg.bias.values_v if abs(b) > limit]
+        if is_cv:
+            endpoints = [cfg.cv_bias.start_v, cfg.cv_bias.stop_v]
+            over = [b for b in endpoints if abs(b) > limit]
+        else:
+            over = [b for b in cfg.bias.values_v if abs(b) > limit]
         if over:
             over_str = ", ".join(f"{b:g}" for b in over)
             resp = QMessageBox.warning(
@@ -800,8 +905,15 @@ class CfMainWindow(QMainWindow):
 
         self._cfg = cfg
         self._sweep_count = 0
+        self._configure_plot_axes(cfg)
         self._clear_plot()
-        self.progress_bias.setMaximum(len(cfg.bias))
+        # Outer loop is bias for C-f, test-frequency for C-V.
+        if is_cv:
+            self.progress_bias.setMaximum(len(cfg.cv_frequencies_hz))
+            self.progress_bias.setFormat("Freq %v / %m")
+        else:
+            self.progress_bias.setMaximum(len(cfg.bias))
+            self.progress_bias.setFormat("Bias %v / %m")
         self.progress_bias.setValue(0)
         self.progress_step.setMaximum(len(cfg.illumination))
         self.progress_step.setValue(0)
@@ -838,10 +950,14 @@ class CfMainWindow(QMainWindow):
             self.status_label.setText(f"CSV write failed: {e}")
             return
         self._sweep_count += 1
-        self._add_trace(result)
-        self.status_label.setText(
-            f"Saved {path.name}  ({self._sweep_count} sweeps total)"
-        )
+        n_suspect, min_abs_phase = self._add_trace(result)
+        msg = f"Saved {path.name}  ({self._sweep_count} sweeps total)"
+        if n_suspect:
+            msg += (
+                f"  ⚠ {n_suspect} loss-dominated pt(s), "
+                f"min |phase| {min_abs_phase:.0f}° — C unreliable there"
+            )
+        self.status_label.setText(msg)
 
     def _on_progress(self, bias_i: int, step_i: int, frac: float) -> None:
         self.progress_bias.setValue(bias_i + 1)
@@ -865,45 +981,102 @@ class CfMainWindow(QMainWindow):
 
     # ---- Plot helpers ------------------------------------------------------
 
+    def _configure_plot_axes(self, cfg: CfConfig) -> None:
+        """Set the plot axes/labels for the run's sweep type.
+
+        C-f: |Z| (log-log) and phase (log-x) vs frequency.
+        C-V: Cp (or Cs) and phase, both linear, vs bias voltage.
+        """
+        self._plot_is_cv = cfg.sweep_type == SweepType.C_V
+        self._plot_equiv = cfg.ia.equiv_circuit
+        if self._plot_is_cv:
+            is_cs = cfg.ia.equiv_circuit == EquivCircuit.CS_RS
+            cap = "Cs" if is_cs else "Cp"
+            self.z_plot.setTitle(cap)
+            self.z_plot.setLabel("left", cap, "F")
+            self.z_plot.setLogMode(x=False, y=False)
+            self.ph_plot.setLogMode(x=False, y=False)
+            self.z_plot.setLabel("bottom", "bias", "V")
+            self.ph_plot.setLabel("bottom", "bias", "V")
+        else:
+            self.z_plot.setTitle("|Z|")
+            self.z_plot.setLabel("left", "|Z|", "Ω")
+            self.z_plot.setLogMode(x=True, y=True)
+            self.ph_plot.setLogMode(x=True, y=False)
+            self.z_plot.setLabel("bottom", "frequency", "Hz")
+            self.ph_plot.setLabel("bottom", "frequency", "Hz")
+        self.ph_plot.setLabel("left", "phase", "°")
+
     def _clear_plot(self) -> None:
         for t in self._traces_z:
             self.z_plot.removeItem(t)
         for t in self._traces_ph:
             self.ph_plot.removeItem(t)
+        for t in self._suspect_items:
+            self.ph_plot.removeItem(t)
         self._traces_z.clear()
         self._traces_ph.clear()
+        self._suspect_items.clear()
 
-    def _add_trace(self, result: SweepResult) -> None:
-        # Color by illumination state — dark grey, lit keyed by wavelength.
-        meta = result.metadata
+    def _pen_for(self, meta):
+        """Pen color by illumination state — grey for dark, keyed by wavelength."""
         if meta.wavelength_nm in (0.0, None):
-            pen = pg.mkPen((120, 120, 120), width=1)
-        else:
-            # Map wavelength to its index in the canonical list for a stable
-            # color; fall back to a hash for off-list wavelengths.
-            colors = [
-                (160, 30, 220),  # 385 violet
-                (30, 100, 220),  # 470 blue
-                (30, 200, 200),  # 505 cyan
-                (50, 200, 30),   # 530 green
-                (220, 200, 30),  # 590 amber
-                (220, 100, 30),  # 625 orange
-                (200, 30, 30),   # 740 deep red
-                (140, 20, 20),   # 850 IR
-            ]
-            try:
-                idx = DEFAULT_CHANNEL_WAVELENGTHS.index(float(meta.wavelength_nm))
-            except ValueError:
-                idx = int(meta.wavelength_nm) % len(colors)
-            pen = pg.mkPen(colors[idx % len(colors)], width=1)
-        f = np.asarray(result.frequency_hz)
-        zmag = result.z_mag
+            return pg.mkPen((120, 120, 120), width=1)
+        colors = [
+            (160, 30, 220),  # 385 violet
+            (30, 100, 220),  # 470 blue
+            (30, 200, 200),  # 505 cyan
+            (50, 200, 30),   # 530 green
+            (220, 200, 30),  # 590 amber
+            (220, 100, 30),  # 625 orange
+            (200, 30, 30),   # 740 deep red
+            (140, 20, 20),   # 850 IR
+        ]
+        try:
+            idx = DEFAULT_CHANNEL_WAVELENGTHS.index(float(meta.wavelength_nm))
+        except ValueError:
+            idx = int(meta.wavelength_nm) % len(colors)
+        return pg.mkPen(colors[idx % len(colors)], width=1)
+
+    def _add_trace(self, result: SweepResult) -> tuple[int, float]:
+        """Plot one trace; return (n_suspect_points, min |phase|) for the status.
+
+        A point with |phase| < 45° is loss-dominated (loss tangent > 1): the
+        capacitive term is smaller than the conductive one, so the extracted
+        C is unreliable. Those points are flagged with red ✕ on the phase plot
+        — most relevant at low f / forward bias where leakage takes over.
+        """
+        pen = self._pen_for(result.metadata)
+        x = result.x_values
         phase = result.phase_deg
+        if self._plot_is_cv:
+            cap, _r = (
+                result.cs_rs if self._plot_equiv == EquivCircuit.CS_RS else result.cp_rp
+            )
+            y_top = cap
+        else:
+            y_top = result.z_mag
         # pyqtgraph in log mode wants the raw values (it does the log itself).
-        t_z = self.z_plot.plot(f, zmag, pen=pen)
-        t_ph = self.ph_plot.plot(f, phase, pen=pen)
+        t_z = self.z_plot.plot(x, y_top, pen=pen)
+        t_ph = self.ph_plot.plot(x, phase, pen=pen)
         self._traces_z.append(t_z)
         self._traces_ph.append(t_ph)
+
+        suspect = np.abs(phase) < 45.0
+        n_suspect = int(np.count_nonzero(suspect))
+        if n_suspect:
+            sc = self.ph_plot.plot(
+                np.asarray(x)[suspect],
+                np.asarray(phase)[suspect],
+                pen=None,
+                symbol="x",
+                symbolBrush=(220, 30, 30),
+                symbolPen=(220, 30, 30),
+                symbolSize=7,
+            )
+            self._suspect_items.append(sc)
+        min_abs_phase = float(np.nanmin(np.abs(phase))) if phase.size else float("nan")
+        return n_suspect, min_abs_phase
 
     # ---- Close cleanup -----------------------------------------------------
 
