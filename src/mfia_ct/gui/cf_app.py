@@ -40,6 +40,8 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -142,6 +144,66 @@ class CfWorker(QObject):
                 self.sweep_done.emit(result)
         except Exception as e:
             self.error.emit(f"{type(e).__name__}: {e}")
+        finally:
+            self.finished.emit()
+
+
+class CfQueueWorker(QObject):
+    """Runs a list of campaigns back-to-back on one thread for unattended
+    (overnight) operation.
+
+    Each queued ``CfConfig`` is run by its own ``CfExperiment`` in sequence,
+    reusing the already-connected MFIA backend and a fresh LED source per
+    campaign. One campaign failing does **not** abort the queue — the error is
+    reported via ``campaign_error`` and the worker moves on, so a single bad
+    config (or a transient LED hiccup) can't waste the whole night. ``stop()``
+    halts the current campaign and the rest of the queue.
+    """
+
+    sweep_done = pyqtSignal(object, int)      # SweepResult, campaign index
+    progress = pyqtSignal(int, int, float)    # bias_i, step_i, frac (current campaign)
+    campaign_started = pyqtSignal(int, int)   # index, total
+    campaign_done = pyqtSignal(int)           # index (completed without error)
+    campaign_error = pyqtSignal(int, str)     # index, message (campaign skipped)
+    finished = pyqtSignal()
+
+    def __init__(self, backend, configs: list[CfConfig], led_factory=None) -> None:
+        super().__init__()
+        self.backend = backend
+        self.configs = configs
+        self.led_factory = led_factory
+        self._exp: Optional[CfExperiment] = None
+        self._stopped = False
+
+    def stop(self) -> None:
+        self._stopped = True
+        if self._exp is not None:
+            self._exp.stop()
+
+    def run(self) -> None:
+        try:
+            total = len(self.configs)
+            for i, cfg in enumerate(self.configs):
+                if self._stopped:
+                    break
+                self.campaign_started.emit(i, total)
+                led = self.led_factory() if self.led_factory else None
+                try:
+                    self._exp = CfExperiment(
+                        self.backend,
+                        cfg,
+                        led=led,
+                        progress_cb=lambda b, s, f: self.progress.emit(b, s, f),
+                    )
+                    for result in self._exp.run():
+                        self.sweep_done.emit(result, i)
+                except Exception as e:
+                    self.campaign_error.emit(i, f"{type(e).__name__}: {e}")
+                else:
+                    if not self._stopped:
+                        self.campaign_done.emit(i)
+                finally:
+                    self._exp = None
         finally:
             self.finished.emit()
 
@@ -756,6 +818,34 @@ class CfMainWindow(QMainWindow):
         self.progress_sweep.setFormat("Sweep %p%")
         self.status_label = QLabel("Connect to an instrument to begin.")
 
+        # ---- Overnight queue ----
+        # Stage several C-f / C-V campaigns (each a full config snapshot) and
+        # run them back-to-back unattended. Set the device once, queue the
+        # suites, press Run queue.
+        self.queue_label = QLabel("Queue empty.")
+        self.queue_list = QListWidget()
+        self.queue_list.setMinimumHeight(90)
+        self.queue_add_btn = QPushButton("Add current config")
+        queue_rm_btn = QPushButton("Remove")
+        queue_clear_btn = QPushButton("Clear")
+        self.run_queue_btn = QPushButton("Run queue ▶")
+        self.queue_add_btn.clicked.connect(self.add_to_queue)
+        queue_rm_btn.clicked.connect(self.remove_selected_from_queue)
+        queue_clear_btn.clicked.connect(self.clear_queue)
+        self.run_queue_btn.clicked.connect(self.run_queue)
+        self.run_queue_btn.setEnabled(False)
+        queue_btns = QHBoxLayout()
+        queue_btns.addWidget(self.queue_add_btn)
+        queue_btns.addWidget(queue_rm_btn)
+        queue_btns.addWidget(queue_clear_btn)
+        queue_btns.addStretch()
+        queue_btns.addWidget(self.run_queue_btn)
+        self.queue_box = QGroupBox("Overnight queue (C-f / C-V campaigns)")
+        queue_layout = QVBoxLayout(self.queue_box)
+        queue_layout.addWidget(self.queue_label)
+        queue_layout.addWidget(self.queue_list)
+        queue_layout.addLayout(queue_btns)
+
         central = QWidget()
         root = QHBoxLayout(central)
 
@@ -782,13 +872,17 @@ class CfMainWindow(QMainWindow):
         right.addWidget(self.progress_step)
         right.addWidget(self.progress_sweep)
         right.addWidget(self.status_label)
+        right.addWidget(self.queue_box)
         root.addLayout(right, stretch=1)
         self.setCentralWidget(central)
 
         self._cfg: CfConfig | None = None
         self._thread: QThread | None = None
-        self._worker: CfWorker | None = None
+        self._worker: CfWorker | CfQueueWorker | None = None
         self._sweep_count = 0
+        # Queued campaign snapshots, and the list actually being run.
+        self._queue: list[CfConfig] = []
+        self._running_queue: list[CfConfig] = []
 
     # ---- Instrument signal handlers ----------------------------------------
 
@@ -816,12 +910,14 @@ class CfMainWindow(QMainWindow):
 
             self.led_factory = _make_pxi
         self.controls.start_btn.setEnabled(True)
+        self._update_queue_buttons()
         self.status_label.setText("Idle. Configure and press Start campaign.")
 
     def _on_instrument_disconnected(self) -> None:
         self.backend = None
         self.led_factory = None
         self.controls.start_btn.setEnabled(False)
+        self._update_queue_buttons()
         self.status_label.setText("Connect to an instrument to begin.")
 
     # ---- Run lifecycle -----------------------------------------------------
@@ -836,28 +932,9 @@ class CfMainWindow(QMainWindow):
             QMessageBox.critical(self, "Config", f"Invalid input:\n{e}")
             return
         is_cv = cfg.sweep_type == SweepType.C_V
-        if is_cv:
-            if not cfg.cv_frequencies_hz:
-                QMessageBox.warning(self, "Config", "Enter at least one test frequency.")
-                return
-            if cfg.cv_bias.n_points < 2:
-                QMessageBox.warning(self, "Config", "C-V needs at least 2 bias points.")
-                return
-            if cfg.cv_bias.start_v == cfg.cv_bias.stop_v:
-                QMessageBox.warning(self, "Config", "C-V bias start and stop are equal.")
-                return
-        else:
-            if not cfg.bias.values_v:
-                QMessageBox.warning(self, "Config", "Bias list is empty.")
-                return
-        if not cfg.illumination.steps:
-            QMessageBox.warning(self, "Config", "Illumination sequence is empty.")
-            return
-        if not cfg.run.device_id:
-            QMessageBox.warning(self, "Config", "Enter a device ID.")
-            return
-        if not cfg.run.output_dir:
-            QMessageBox.warning(self, "Config", "Pick an output folder.")
+        err = self._hard_validate(cfg)
+        if err:
+            QMessageBox.warning(self, "Config", err)
             return
 
         # Bias-range guard: the MFIA hard-limits DC bias by terminal mode
@@ -935,6 +1012,7 @@ class CfMainWindow(QMainWindow):
                 return
 
         self._cfg = cfg
+        self._running_queue = []  # mark this as a single run, not a queue run
         self._sweep_count = 0
         self._configure_plot_axes(cfg)
         self._clear_plot()
@@ -963,6 +1041,8 @@ class CfMainWindow(QMainWindow):
 
         self.controls.start_btn.setEnabled(False)
         self.controls.stop_btn.setEnabled(True)
+        self.queue_add_btn.setEnabled(False)
+        self.run_queue_btn.setEnabled(False)
         self.instrument_panel.set_busy(True)
 
     def stop(self) -> None:
@@ -971,6 +1051,15 @@ class CfMainWindow(QMainWindow):
         self.status_label.setText("Stopping…")
 
     def _on_sweep_done(self, result: SweepResult) -> None:
+        self._save_and_plot(result)
+
+    def _save_and_plot(self, result: SweepResult) -> None:
+        """Write one finished sweep to its campaign's output folder and plot it.
+
+        Shared by the single-run and queue paths; ``self._cfg`` is the active
+        campaign (set per-campaign by the queue at ``campaign_started``), so its
+        ``output_dir`` is where this sweep lands.
+        """
         if self._cfg is None:
             return
         out_dir = Path(self._cfg.run.output_dir)
@@ -1003,12 +1092,270 @@ class CfMainWindow(QMainWindow):
         if self._thread:
             self._thread.quit()
             self._thread.wait()
+        self._thread = None
+        self._worker = None
         self.controls.start_btn.setEnabled(self.backend is not None)
         self.controls.stop_btn.setEnabled(False)
+        self.queue_add_btn.setEnabled(True)
         self.instrument_panel.set_busy(False)
-        self.status_label.setText(
-            f"Done. {self._sweep_count} sweeps written to {self._cfg.run.output_dir if self._cfg else ''}"
+        if self._running_queue:
+            n = len(self._running_queue)
+            self.status_label.setText(
+                f"Queue done. {self._sweep_count} sweeps across {n} campaign(s)."
+            )
+        else:
+            self.status_label.setText(
+                f"Done. {self._sweep_count} sweeps written to "
+                f"{self._cfg.run.output_dir if self._cfg else ''}"
+            )
+        self._update_queue_buttons()
+
+    # ---- Overnight queue ---------------------------------------------------
+
+    def _hard_validate(self, cfg: CfConfig) -> Optional[str]:
+        """Required-field / minimum checks shared by Start and the queue.
+
+        Returns an error message, or ``None`` if the config is runnable.
+        """
+        if cfg.sweep_type == SweepType.C_V:
+            if not cfg.cv_frequencies_hz:
+                return "Enter at least one test frequency."
+            if cfg.cv_bias.n_points < 2:
+                return "C-V needs at least 2 bias points."
+            if cfg.cv_bias.start_v == cfg.cv_bias.stop_v:
+                return "C-V bias start and stop are equal."
+        elif not cfg.bias.values_v:
+            return "Bias list is empty."
+        if not cfg.illumination.steps:
+            return "Illumination sequence is empty."
+        if not cfg.run.device_id:
+            return "Enter a device ID."
+        if not cfg.run.output_dir:
+            return "Pick an output folder."
+        return None
+
+    def _update_queue_buttons(self) -> None:
+        running = self._thread is not None
+        self.run_queue_btn.setEnabled(
+            bool(self._queue) and self.backend is not None and not running
         )
+
+    def _summarize(self, cfg: CfConfig) -> str:
+        if cfg.sweep_type == SweepType.C_V:
+            mode = "C-V"
+            axis = (
+                f"{len(cfg.cv_frequencies_hz)} freq · bias "
+                f"{cfg.cv_bias.start_v:g}→{cfg.cv_bias.stop_v:g}V×{cfg.cv_bias.n_points}"
+            )
+        else:
+            mode = "C-f"
+            axis = f"{len(cfg.bias)} bias"
+        lit = sorted({s.wavelength_nm for s in cfg.illumination.steps if not s.is_dark})
+        wl = f"{len(lit)}λ" if lit else "dark-only"
+        return (
+            f"{mode} · {axis} · {len(cfg.illumination)} illum steps ({wl}) · "
+            f"{cfg.run.device_id or '?'}"
+        )
+
+    def add_to_queue(self) -> None:
+        try:
+            cfg = self.controls.build_config()
+        except ValueError as e:
+            QMessageBox.critical(self, "Config", f"Invalid input:\n{e}")
+            return
+        err = self._hard_validate(cfg)
+        if err:
+            QMessageBox.warning(self, "Add to queue", err)
+            return
+        self._queue.append(cfg)
+        self.queue_list.addItem(
+            QListWidgetItem(f"{len(self._queue)}. {self._summarize(cfg)}")
+        )
+        self._refresh_queue_label()
+        self._update_queue_buttons()
+
+    def remove_selected_from_queue(self) -> None:
+        if self._thread is not None:
+            return
+        rows = sorted(
+            (self.queue_list.row(i) for i in self.queue_list.selectedItems()),
+            reverse=True,
+        )
+        for r in rows:
+            del self._queue[r]
+        self._rebuild_queue_list()
+
+    def clear_queue(self) -> None:
+        if self._thread is not None:
+            return
+        self._queue.clear()
+        self._rebuild_queue_list()
+
+    def _rebuild_queue_list(self) -> None:
+        self.queue_list.clear()
+        for n, cfg in enumerate(self._queue, 1):
+            self.queue_list.addItem(QListWidgetItem(f"{n}. {self._summarize(cfg)}"))
+        self._refresh_queue_label()
+        self._update_queue_buttons()
+
+    def _refresh_queue_label(self) -> None:
+        n = len(self._queue)
+        self.queue_label.setText("Queue empty." if n == 0 else f"{n} campaign(s) queued.")
+
+    def _probe_led(self, lit_wavelengths: list[float]) -> Optional[str]:
+        """Open the LED source and verify the requested wavelengths exist.
+
+        Returns an error message or ``None``. Fails fast before a multi-hour
+        run rather than dying partway through.
+        """
+        led = self.led_factory() if self.led_factory else None
+        if led is None:
+            return "Illuminated steps are configured but no LED source is wired."
+        try:
+            led.connect()
+            try:
+                available = set(led.wavelengths())
+                missing = sorted(w for w in lit_wavelengths if w not in available)
+            finally:
+                led.disconnect()
+        except Exception as e:
+            return f"Could not open the LED source:\n{type(e).__name__}: {e}"
+        if missing:
+            miss = ", ".join(f"{w:g}" for w in missing)
+            avail = ", ".join(f"{w:g}" for w in sorted(available))
+            return (
+                f"These wavelengths aren't mapped on the LED source: {miss} nm.\n"
+                f"Available: {avail} nm."
+            )
+        return None
+
+    def run_queue(self) -> None:
+        if self.backend is None:
+            QMessageBox.warning(self, "Run queue", "Connect to an instrument first.")
+            return
+        if not self._queue:
+            QMessageBox.warning(self, "Run queue", "Queue is empty — add a config first.")
+            return
+
+        # Bias-range soft guard across every queued campaign (one prompt).
+        over: list[float] = []
+        for cfg in self._queue:
+            limit = TERMINAL_BIAS_LIMIT_V[cfg.ia.terminal_mode]
+            pts = (
+                [cfg.cv_bias.start_v, cfg.cv_bias.stop_v]
+                if cfg.sweep_type == SweepType.C_V
+                else cfg.bias.values_v
+            )
+            over += [b for b in pts if abs(b) > limit]
+        if over:
+            over_str = ", ".join(f"{b:g}" for b in sorted(set(over)))
+            resp = QMessageBox.warning(
+                self,
+                "Bias out of range",
+                f"Some queued campaigns have bias points beyond the terminal-mode "
+                f"limit; the hardware will clamp them: {over_str} V.\n\nProceed anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if resp != QMessageBox.StandardButton.Yes:
+                return
+
+        # Make sure every output folder exists before committing to the night.
+        for cfg in self._queue:
+            try:
+                Path(cfg.run.output_dir).mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                QMessageBox.critical(
+                    self, "Output folder", f"Cannot create {cfg.run.output_dir}:\n{e}"
+                )
+                return
+
+        # Fail-fast LED probe over the union of lit wavelengths in the queue.
+        lit = sorted(
+            {
+                s.wavelength_nm
+                for cfg in self._queue
+                for s in cfg.illumination.steps
+                if not s.is_dark and s.wavelength_nm is not None
+            }
+        )
+        if lit:
+            err = self._probe_led(lit)
+            if err:
+                QMessageBox.critical(self, "LED", err)
+                return
+
+        # Snapshot the queue so edits during the run can't change what's running.
+        self._running_queue = list(self._queue)
+        self._cfg = None
+        self._sweep_count = 0
+        self._clear_plot()
+
+        self._thread = QThread()
+        worker = CfQueueWorker(
+            self.backend, self._running_queue, led_factory=self.led_factory
+        )
+        self._worker = worker
+        worker.moveToThread(self._thread)
+        self._thread.started.connect(worker.run)
+        worker.campaign_started.connect(self._on_queue_campaign_started)
+        worker.sweep_done.connect(self._on_queue_sweep_done)
+        worker.progress.connect(self._on_progress)
+        worker.campaign_done.connect(self._on_queue_campaign_done)
+        worker.campaign_error.connect(self._on_queue_campaign_error)
+        worker.finished.connect(self._on_finished)
+        self._thread.start()
+
+        self.controls.start_btn.setEnabled(False)
+        self.controls.stop_btn.setEnabled(True)
+        self.queue_add_btn.setEnabled(False)
+        self.run_queue_btn.setEnabled(False)
+        self.instrument_panel.set_busy(True)
+        self.status_label.setText(
+            f"Queue running: {len(self._running_queue)} campaign(s)…"
+        )
+
+    def _on_queue_campaign_started(self, index: int, total: int) -> None:
+        cfg = self._running_queue[index]
+        self._cfg = cfg  # active campaign — drives saving + plot axes
+        self._configure_plot_axes(cfg)
+        self._clear_plot()
+        if cfg.sweep_type == SweepType.C_V:
+            self.progress_bias.setMaximum(len(cfg.cv_frequencies_hz))
+            self.progress_bias.setFormat("Freq %v / %m")
+        else:
+            self.progress_bias.setMaximum(len(cfg.bias))
+            self.progress_bias.setFormat("Bias %v / %m")
+        self.progress_bias.setValue(0)
+        self.progress_step.setMaximum(len(cfg.illumination))
+        self.progress_step.setValue(0)
+        self.progress_sweep.setValue(0)
+        self._mark_queue_item(index, "▶ ")
+        self.queue_list.setCurrentRow(index)
+        self.status_label.setText(
+            f"Campaign {index + 1}/{total}: {self._summarize(cfg)}"
+        )
+
+    def _on_queue_sweep_done(self, result: SweepResult, _index: int) -> None:
+        self._save_and_plot(result)
+
+    def _on_queue_campaign_done(self, index: int) -> None:
+        self._mark_queue_item(index, "✓ ")
+
+    def _on_queue_campaign_error(self, index: int, msg: str) -> None:
+        self._mark_queue_item(index, "✗ ")
+        self.status_label.setText(f"Campaign {index + 1} failed (skipped): {msg}")
+
+    def _mark_queue_item(self, index: int, marker: str) -> None:
+        item = self.queue_list.item(index)
+        if item is None:
+            return
+        text = item.text()
+        for m in ("▶ ", "✓ ", "✗ "):
+            if text.startswith(m):
+                text = text[len(m):]
+                break
+        item.setText(marker + text)
 
     # ---- Plot helpers ------------------------------------------------------
 

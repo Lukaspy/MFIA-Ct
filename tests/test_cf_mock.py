@@ -507,3 +507,139 @@ def test_progress_callback_fires_with_indices() -> None:
     assert any(t[0] == 1 for t in seen)
     # Last reported fraction reaches 1.0 by end-of-sweep.
     assert any(math.isclose(t[2], 1.0, abs_tol=1e-6) for t in seen)
+
+
+# --- Overnight queue (CfQueueWorker) ---------------------------------------
+
+
+def test_queue_worker_runs_all_campaigns(qapp) -> None:
+    from mfia_ct.gui.cf_app import CfQueueWorker
+
+    cfgs = [_fast_cfg(), _fast_cv_cfg()]  # one C-f then one C-V
+    worker = CfQueueWorker(
+        MockMFIA(), cfgs, led_factory=lambda: MockLedSource()
+    )
+    started, done, errors, sweeps, finished = [], [], [], [], []
+    worker.campaign_started.connect(lambda i, n: started.append((i, n)))
+    worker.campaign_done.connect(done.append)
+    worker.campaign_error.connect(lambda i, m: errors.append(i))
+    worker.sweep_done.connect(lambda r, i: sweeps.append(i))
+    worker.finished.connect(lambda: finished.append(True))
+
+    worker.run()  # synchronous; signals fire inline on this thread
+
+    assert [i for i, _ in started] == [0, 1]
+    assert started[0][1] == 2  # total reported
+    assert done == [0, 1]
+    assert errors == []
+    assert finished == [True]
+    # Both campaigns produced sweeps, each tagged with its queue index.
+    assert set(sweeps) == {0, 1}
+    assert sweeps.count(0) == 6   # C-f: 2 bias × 3 illum steps
+    assert sweeps.count(1) == 6   # C-V: 2 freq × 3 illum steps
+
+
+def test_queue_worker_continues_past_failed_campaign(qapp) -> None:
+    from mfia_ct.gui.cf_app import CfQueueWorker
+
+    bad = _fast_cfg()
+    # A wavelength the mock LED source doesn't have → the campaign raises when
+    # it tries to apply that step; the queue must skip it and run the next one.
+    bad.illumination.steps.append(
+        IlluminationStep("999nm", 999.0, intensity_pct=50.0, settle_s=0.0)
+    )
+    good = _fast_cv_cfg()
+    worker = CfQueueWorker(
+        MockMFIA(), [bad, good], led_factory=lambda: MockLedSource()
+    )
+    done, errors = [], []
+    worker.campaign_done.connect(done.append)
+    worker.campaign_error.connect(lambda i, m: errors.append(i))
+
+    worker.run()
+
+    assert errors == [0]   # first campaign failed
+    assert done == [1]     # second still ran to completion
+
+
+def test_queue_worker_stop_halts_remaining_campaigns(qapp) -> None:
+    from mfia_ct.gui.cf_app import CfQueueWorker
+
+    cfgs = [_fast_cfg(), _fast_cv_cfg()]
+    worker = CfQueueWorker(
+        MockMFIA(), cfgs, led_factory=lambda: MockLedSource()
+    )
+    started = []
+    # Stop as soon as the first campaign begins → the second never starts.
+    worker.campaign_started.connect(lambda i, n: (started.append(i), worker.stop()))
+    done = []
+    worker.campaign_done.connect(done.append)
+
+    worker.run()
+
+    assert started == [0]   # only the first campaign was entered
+    assert 1 not in done    # the second was not run
+
+
+def _sweep_type_index(combo, sweep_type) -> int:
+    for i in range(combo.count()):
+        if combo.itemData(i) == sweep_type:
+            return i
+    raise AssertionError("sweep type not found")
+
+
+def test_gui_queue_runs_cf_then_cv_end_to_end(qtbot, tmp_path) -> None:
+    """Full GUI path: connect mock → queue a C-f and a C-V campaign → run the
+    queue → both campaigns' CSVs land in the output folder and the controls
+    are restored. Exercises the worker-thread wiring the overnight run uses."""
+    from mfia_ct.gui.cf_app import CfMainWindow
+    from mfia_ct.led_source import MockLedSource
+    from mfia_ct.mock_hardware import MockMFIA
+
+    w = CfMainWindow(preselect_mock=True)
+    qtbot.addWidget(w)
+    # Simulate a connected mock instrument (skip the InstrumentPanel dialog).
+    w.backend = MockMFIA()
+    w.led_factory = lambda: MockLedSource()
+    w.controls.start_btn.setEnabled(True)
+    w._update_queue_buttons()
+
+    c = w.controls
+    c.device_id.setText("n-Si-A")
+    c.output_dir.setText(str(tmp_path))
+    c.bias_settle.setValue(0.0)
+
+    # Reduce illumination to a single fast lit step (one wavelength, no dark).
+    ed = c.illum_editor
+    for wl, cb, _pct in ed.channel_rows:
+        cb.setChecked(wl == 385.0)
+    ed.dark_pre.setChecked(False)
+    ed.dark_post.setChecked(False)
+    ed.light_settle.setValue(0.0)
+    ed.dark_settle.setValue(0.0)
+    ed._regenerate_table()
+
+    # Queue a C-f campaign (2 bias points).
+    c.sweep_type.setCurrentIndex(_sweep_type_index(c.sweep_type, SweepType.C_F))
+    c.bias_list.setText("0,1")
+    w.add_to_queue()
+
+    # Queue a C-V campaign (2 test frequencies, few bias points).
+    c.sweep_type.setCurrentIndex(_sweep_type_index(c.sweep_type, SweepType.C_V))
+    c.cv_freqs.setText("1000,10000")
+    c.cv_points.setValue(4)
+    w.add_to_queue()
+
+    assert len(w._queue) == 2
+
+    w.run_queue()
+    qtbot.waitUntil(lambda: w._thread is None, timeout=20000)
+
+    files = sorted(p.name for p in tmp_path.glob("*.csv"))
+    assert any(n.startswith("MFIA_Cf_") for n in files), files
+    assert any(n.startswith("MFIA_CV_") for n in files), files
+    # Both queue rows marked complete; controls restored.
+    markers = [w.queue_list.item(i).text()[0] for i in range(w.queue_list.count())]
+    assert markers == ["✓", "✓"]
+    assert w.run_queue_btn.isEnabled()
+    assert not w.controls.stop_btn.isEnabled()
