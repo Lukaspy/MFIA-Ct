@@ -53,6 +53,12 @@ def check(path: str) -> dict:
         return {"name": os.path.basename(path), "empty": True}
     neg_g = sum(1 for v in d["g"] if v < 0)
     max_abs_phase = max(abs(p) for p in d["phase"])
+    # A passive cap-dominated DUT has phase in [-90, 0]. Positive phase =
+    # inductive-looking = unphysical here (low-f noise / artifact). The most
+    # negative phase says how capacitive it ever gets.
+    inductive = sum(1 for p in d["phase"] if p > 10.0)
+    min_phase = min(d["phase"])
+    reaches_cap = min_phase <= -LOSS_DEG
     # Adjacent |Z| jumps, ordered by frequency.
     order = sorted(zip(d["f"], d["z"]))
     worst_jump, jump_at = 1.0, None
@@ -68,11 +74,13 @@ def check(path: str) -> dict:
         if abs(p) < LOSS_DEG:
             cross = f
             break
-    clean = (neg_g == 0 and worst_jump <= JUMP_RATIO and max_abs_phase >= LOSS_DEG)
+    clean = (neg_g == 0 and worst_jump <= JUMP_RATIO and reaches_cap
+             and inductive == 0)
     return {
         "name": os.path.basename(path), "n": n, "neg_g": neg_g,
         "max_abs_phase": max_abs_phase, "worst_jump": worst_jump,
         "jump_at": jump_at, "cross": cross, "clean": clean, "empty": False,
+        "inductive": inductive, "min_phase": min_phase,
     }
 
 
@@ -106,24 +114,27 @@ def main(argv=None) -> int:
               + (f" between {r['jump_at'][0]:.3g}–{r['jump_at'][1]:.3g} Hz"
                  f" (auto-range step)" if r["worst_jump"] > JUMP_RATIO and r["jump_at"]
                  else " (ok)"))
-        print(f"  max |phase|         : {r['max_abs_phase']:.0f}°   "
-              f"{'(reaches capacitive — good)' if r['max_abs_phase'] >= LOSS_DEG else '(never capacitive — loss-dominated)'}")
+        print(f"  inductive low-f pts : {r['inductive']}   "
+              f"{'(positive phase — unphysical artifact)' if r['inductive'] else '(none — good)'}")
+        print(f"  most capacitive ϕ   : {r['min_phase']:.0f}°   "
+              f"{'(reaches a real capacitive band)' if r['min_phase'] <= -LOSS_DEG else '(never truly capacitive)'}")
         if r["cross"] is not None:
             print(f"  loss crossover      : ~{r['cross']:.3g} Hz "
                   f"(capacitive above, loss-dominated below)")
         return 0 if r["clean"] else 1
 
-    print(f"{'file':<52} {'neg-G':>6} {'jump':>7} {'maxϕ':>6}  verdict")
+    print(f"{'file':<50} {'neg-G':>6} {'ind':>5} {'jump':>7} {'min ϕ':>6}  verdict")
     for r in results:
         v = "CLEAN" if r["clean"] else "FLAG"
-        print(f"{r['name'][:52]:<52} {r['neg_g']:>6} {r['worst_jump']:>6.1f}x "
-              f"{r['max_abs_phase']:>5.0f}°  {v}")
+        print(f"{r['name'][:50]:<50} {r['neg_g']:>6} {r['inductive']:>5} "
+              f"{r['worst_jump']:>6.1f}x {r['min_phase']:>5.0f}°  {v}")
     print(f"\n{len(results)-len(flagged)}/{len(results)} CLEAN, {len(flagged)} flagged.")
     if flagged:
         ng = sum(1 for r in flagged if r["neg_g"])
+        ind = sum(1 for r in flagged if r["inductive"])
         jp = sum(1 for r in flagged if r["worst_jump"] > JUMP_RATIO)
-        print(f"  {ng} with negative G (comp), {jp} with range jumps (auto-range).")
-        print("  → Recompensate (open/short across ranges) and re-run on a fresh open + dark.")
+        print(f"  {ng} with negative G, {ind} with inductive (positive-phase) low-f "
+              f"points, {jp} with range jumps.")
     return 0 if not flagged else 1
 
 
