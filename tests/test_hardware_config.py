@@ -51,9 +51,11 @@ def test_cf_output_range_covers_bias_and_amp() -> None:
 
 
 def test_configure_enables_the_signal_output() -> None:
-    """The output stage must be turned ON — relying on it being on read GΩ open."""
+    """The test-signal output must be turned ON — else every sweep reads GΩ open.
+    imps/output/on is the IA "Test Signal" toggle; sigouts/on is the raw stage."""
     cfgs = load_plan(EXAMPLES / "plan_2013-3_test.yaml")
     s = _configure(cfgs[0])
+    assert s[f"/{DEV}/imps/0/output/on"] == 1
     assert s[f"/{DEV}/sigouts/0/on"] == 1
 
 

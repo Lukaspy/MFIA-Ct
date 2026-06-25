@@ -120,7 +120,8 @@ class MFIA:
             (f"/{dev}/imps/{ia.imp_index}/enable", 1),
             (f"/{dev}/imps/{ia.imp_index}/mode", _TERMINAL_MODE_NODE_VALUE[ia.terminal_mode]),
             (f"/{dev}/imps/{ia.imp_index}/auto/output", 0),
-            (f"/{dev}/sigouts/{ia.imp_index}/on", 1),  # enable the output stage
+            (f"/{dev}/imps/{ia.imp_index}/output/on", 1),  # IA test-signal ON
+            (f"/{dev}/sigouts/{ia.imp_index}/on", 1),       # raw output stage ON
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 0),
             (f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 0),
             (f"/{dev}/imps/{ia.imp_index}/freq", ia.frequency_hz),
@@ -178,10 +179,13 @@ class MFIA:
             # so it can't shrink the range back down to the AC amplitude.
             (f"/{dev}/imps/{ia.imp_index}/auto/output", 0),
             (f"/{dev}/sigouts/{ia.imp_index}/range", output_range),
-            # ENABLE the signal output. Without this the tool drove nothing when
-            # the output happened to be off (after disable_everything / the webUI
-            # being closed) — every sweep read GΩ "open" until a power-cycle.
-            # imps/enable alone does NOT turn the output stage on via the API.
+            # ENABLE the test-signal output. The IA-tab "Test Signal" toggle is
+            # imps/N/output/on; sigouts/N/on is the raw output stage. Set BOTH —
+            # the tool set neither, so it drove nothing whenever the output was
+            # off (after disable_everything / the webUI being closed) and every
+            # sweep read GΩ "open" until a power-cycle. imps/enable alone and
+            # sigouts/on alone are NOT enough; imps/output/on is the live switch.
+            (f"/{dev}/imps/{ia.imp_index}/output/on", 1),
             (f"/{dev}/sigouts/{ia.imp_index}/on", 1),
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 1),  # sweeper expects auto-BW on
             (f"/{dev}/imps/{ia.imp_index}/output/amplitude", amp_pk),
