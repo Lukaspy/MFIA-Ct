@@ -41,14 +41,38 @@ defaults:
     points_per_decade: 10
 
 blocks:
-  # Apples-to-apples vs the webUI 0 V sweep.
-  - name: "0V dark (should overlay webUI)"
+  # Amplitude sweep: 30 mV is marginal at the high-Z low-f tail (~2 nA at 1 Hz,
+  # auto-range can't lock -> the low-f scatter). The webUI was clean at 300 mV.
+  # Run 30 / 100 / 300 mV at 0 V and -2 V dark and see where the low-f locks in.
+  # 300 mV reproduces the webUI (confirms the tool matches); 100 mV is the most
+  # the dark IV stays linear at — pick the lowest amplitude with a clean tail.
+  - name: "0V dark @ 30 mV"
     type: c-f
     bias: [0]
+    amplitude_mv_rms: 30
     illumination: {dark_only: true}
-
-  # The output-range fix: -2 V must run with OVO dark and read a clean cap.
-  - name: "-2V dark (biased, no OVO)"
+  - name: "0V dark @ 100 mV"
+    type: c-f
+    bias: [0]
+    amplitude_mv_rms: 100
+    illumination: {dark_only: true}
+  - name: "0V dark @ 300 mV (= webUI)"
+    type: c-f
+    bias: [0]
+    amplitude_mv_rms: 300
+    illumination: {dark_only: true}
+  - name: "-2V dark @ 30 mV"
     type: c-f
     bias: [-2]
+    amplitude_mv_rms: 30
+    illumination: {dark_only: true}
+  - name: "-2V dark @ 100 mV"
+    type: c-f
+    bias: [-2]
+    amplitude_mv_rms: 100
+    illumination: {dark_only: true}
+  - name: "-2V dark @ 300 mV (= webUI)"
+    type: c-f
+    bias: [-2]
+    amplitude_mv_rms: 300
     illumination: {dark_only: true}
