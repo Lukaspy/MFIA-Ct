@@ -1,78 +1,74 @@
-# MFIA-cf TEST plan — validate the tool against the LabOne webUI. NOT the campaign.
+# MFIA-cf TEST plan — can the -2 V low-f tail be recovered? NOT the campaign.
 #
-# The whole high-Z saga turned out to be (1) the drain miswired to HPOT instead
-# of HCUR, and (2) a tool bug: auto-output sized the output range to the 30 mV AC
-# and ignored the DC bias, so any bias over-ranged the output -> OVO -> garbage.
-# Wired right + an explicit output range, the webUI reads a clean capacitor on
-# plain AUTO range. So this plan is deliberately boring: auto range, 30 mV, no
-# pinned range, no oversampling — just confirm the tool matches the webUI.
+# Where we are: output-range/OVO fix works, high-f is a clean capacitor at any
+# bias, and 0 V is fully clean at 100 mV (the campaign amplitude). The one
+# remaining problem is the -2 V LOW-F tail: at -2 V the device leaks ~54 nA DC,
+# which forces the input auto-range coarse, and the small low-f AC current
+# (~6 nA) drowns in it -> inductive/neg-G garbage below ~100 Hz. 0 V (~2 nA
+# leakage) stays on a sensitive range and is clean. Amplitude doesn't fix it
+# (30/100/300 mV all bad at -2 V).
 #
-#   Goal 1 (0 V): should overlay your webUI 0 V sweep almost exactly — a clean
-#     capacitor, |Z| falling ~16 MΩ (1 Hz) toward ~hundreds of Ω at high f,
-#     phase a smooth -80° -> 0°. POSITIVE G throughout.
-#   Goal 2 (-2 V): no OVO (the output-range fix), and a clean biased capacitor
-#     shifted from the 0 V curve (more depletion).
+# This tests the one lever suited to a small signal on a coarse range:
+# OVERSAMPLING (average the demod down). Narrow 1-30 Hz to keep it quick.
+#   Win = -2 V low-f goes positive-G, phase settles smooth, |Z| climbs toward
+#   the ~20-37 MΩ resistive plateau (matching the B1500 at the kHz overlap).
+#   If oversampling doesn't fix the SYSTEMATIC inductive phase, the -2 V low-f
+#   is genuinely DC-leakage-limited and the campaign uses -2 V for high-f only.
 #
-# If 0 V matches the webUI, the measurement chain is correct and the campaign
-# plan is trustworthy. If 30 mV looks noisy vs the webUI's 300 mV, bump
-# amplitude a little or add modest oversampling — but try it clean first.
-# Compensate open/short (standard) over the range first.
+# 100 mV throughout (the validated 0 V amplitude). Compensate first.
 
 device:
   id: "2013-3"
   substrate: "n-Si"
-  notes: "TEST — match the webUI (auto range, 30 mV), confirm 0 V overlay + -2 V no-OVO"
+  notes: "TEST — recover -2 V low-f via oversampling? 0 V already clean at 100 mV"
 
-output_dir: "/home/lukas/Documents/capacitance_measurements/ranging_test/test4"
+output_dir: "/home/lukas/Documents/capacitance_measurements/ranging_test/test5"
 
 defaults:
-  amplitude_mv_rms: 30
+  amplitude_mv_rms: 100         # the validated 0 V amplitude
   terminal_mode: 2-terminal
   equiv_circuit: Cp||Rp
   device_settle_s: 10
   dark_settle_s: 10
   settling_tcs: 15
   auto_bandwidth: true
-  oversampling: 1            # off — auto range alone should match the webUI
-  current_range_a: auto      # AUTO, like the webUI (no pinning)
+  oversampling: 1
+  current_range_a: auto
   freq:
     start_hz: 1
     stop_hz: 500000
     points_per_decade: 10
 
 blocks:
-  # Amplitude sweep: 30 mV is marginal at the high-Z low-f tail (~2 nA at 1 Hz,
-  # auto-range can't lock -> the low-f scatter). The webUI was clean at 300 mV.
-  # Run 30 / 100 / 300 mV at 0 V and -2 V dark and see where the low-f locks in.
-  # 300 mV reproduces the webUI (confirms the tool matches); 100 mV is the most
-  # the dark IV stays linear at — pick the lowest amplitude with a clean tail.
-  - name: "0V dark @ 30 mV"
+  # Reference: 0 V should be clean end-to-end at 100 mV (sanity that nothing regressed).
+  - name: "0V dark @ 100 mV (clean reference)"
     type: c-f
     bias: [0]
-    amplitude_mv_rms: 30
     illumination: {dark_only: true}
-  - name: "0V dark @ 100 mV"
-    type: c-f
-    bias: [0]
-    amplitude_mv_rms: 100
-    illumination: {dark_only: true}
-  - name: "0V dark @ 300 mV (= webUI)"
-    type: c-f
-    bias: [0]
-    amplitude_mv_rms: 300
-    illumination: {dark_only: true}
-  - name: "-2V dark @ 30 mV"
+
+  # -2 V low-f, oversampling ladder (narrow 1-30 Hz).
+  - name: "-2V @ 100mV, oversampling 1 (baseline)"
     type: c-f
     bias: [-2]
-    amplitude_mv_rms: 30
+    freq: {start_hz: 1, stop_hz: 30, points_per_decade: 10}
     illumination: {dark_only: true}
-  - name: "-2V dark @ 100 mV"
+  - name: "-2V @ 100mV, oversampling 50"
     type: c-f
     bias: [-2]
-    amplitude_mv_rms: 100
+    oversampling: 50
+    freq: {start_hz: 1, stop_hz: 30, points_per_decade: 10}
     illumination: {dark_only: true}
-  - name: "-2V dark @ 300 mV (= webUI)"
+  - name: "-2V @ 100mV, oversampling 200"
     type: c-f
     bias: [-2]
-    amplitude_mv_rms: 300
+    oversampling: 200
+    freq: {start_hz: 1, stop_hz: 30, points_per_decade: 10}
+    illumination: {dark_only: true}
+  # Is it settling, not noise? oversampling 50 + longer per-point settle.
+  - name: "-2V @ 100mV, oversampling 50, settle 30 TC"
+    type: c-f
+    bias: [-2]
+    oversampling: 50
+    settling_tcs: 30
+    freq: {start_hz: 1, stop_hz: 30, points_per_decade: 10}
     illumination: {dark_only: true}

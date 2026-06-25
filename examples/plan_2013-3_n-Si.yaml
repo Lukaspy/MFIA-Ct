@@ -25,7 +25,13 @@ device:
 output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3"
 
 defaults:
-  amplitude_mv_rms: 30
+  amplitude_mv_rms: 100         # validated: 30 mV too small for the high-Z low-f
+                                # tail (~nA drive); 100 mV clean at 0 V & linear.
+                                # NOTE: -2 V low-f may be DC-leakage-limited (the
+                                # 54 nA leakage forces a coarse input range) — see
+                                # plan_2013-3_test (test5). high-f is clean at all
+                                # biases regardless. Drop amplitude for bright-light
+                                # blocks if the lit IV goes nonlinear.
   terminal_mode: 2-terminal
   equiv_circuit: Cp||Rp
   device_settle_s: 10
