@@ -188,3 +188,22 @@ def test_example_plans_load() -> None:
         if p.exists():
             configs = load_plan(p)
             assert configs, f"{name} produced no campaigns"
+
+
+def test_oversampling_default_and_override() -> None:
+    base = parse_plan(_minimal())[0]
+    assert base.sweep.averaging_samples == 1  # default = none
+    plan = _minimal()
+    plan["defaults"] = {"oversampling": 50}
+    plan["blocks"] = [
+        {"name": "a", "type": "c-f", "bias": [0], "illumination": {"dark_only": True}},
+        {"name": "b", "type": "c-f", "bias": [0], "oversampling": 200,
+         "illumination": {"dark_only": True}},
+        {"name": "e", "type": "c-v", "frequencies": [100], "oversampling": 300,
+         "bias": {"start_v": -1, "stop_v": 1, "points": 11},
+         "illumination": {"dark_only": True}},
+    ]
+    a, b, e = parse_plan(plan)
+    assert a.sweep.averaging_samples == 50     # plan default
+    assert b.sweep.averaging_samples == 200    # block override (c-f)
+    assert e.cv_bias.averaging_samples == 300  # block override (c-v)

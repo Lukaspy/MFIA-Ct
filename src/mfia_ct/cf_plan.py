@@ -68,6 +68,9 @@ class _Defaults:
     dark_settle_s: float = 10.0
     settling_tcs: float = 7.0
     auto_bandwidth: bool = True
+    # Demod samples averaged per point ("oversampling"). 1 = none. ZI's high-Z
+    # recipe uses ~800-2000 to pull a few-pA signal out of the noise at low f.
+    oversampling: int = 1
     # Fixed current-input range in amps (e.g. 1.0e-7 for 100 nA); None / "auto"
     # = auto-range. Pin a sensitive range for high-Z / low-current sweeps.
     current_range_a: float | None = None
@@ -122,6 +125,7 @@ def _merge_defaults(base: _Defaults, raw: dict[str, Any]) -> _Defaults:
         dark_settle_s=float(raw.get("dark_settle_s", out.dark_settle_s)),
         settling_tcs=float(raw.get("settling_tcs", out.settling_tcs)),
         auto_bandwidth=bool(raw.get("auto_bandwidth", out.auto_bandwidth)),
+        oversampling=max(1, int(raw.get("oversampling", out.oversampling))),
         current_range_a=_parse_current_range(
             raw.get("current_range_a", out.current_range_a), out.current_range_a
         ),
@@ -138,7 +142,8 @@ def _block_defaults(base: _Defaults, block: dict[str, Any]) -> _Defaults:
     deep-anchor block). ``freq`` overrides nest under ``freq:`` as in defaults."""
     keys = {
         "amplitude_mv_rms", "terminal_mode", "equiv_circuit", "device_settle_s",
-        "dark_settle_s", "settling_tcs", "auto_bandwidth", "current_range_a", "freq",
+        "dark_settle_s", "settling_tcs", "auto_bandwidth", "oversampling",
+        "current_range_a", "freq",
     }
     inline = {k: block[k] for k in keys if k in block}
     return _merge_defaults(base, inline) if inline else base
@@ -317,6 +322,7 @@ def _block_to_config(
             log_spacing=d.log_spacing,
             settling_tcs=d.settling_tcs,
             auto_bandwidth=d.auto_bandwidth,
+            averaging_samples=d.oversampling,
         )
         bias = BiasSequence(
             values_v=[float(b) for b in bias_vals], bias_settle_s=d.device_settle_s
@@ -350,6 +356,7 @@ def _block_to_config(
             n_points=int(bias["points"]),
             settling_tcs=d.settling_tcs,
             auto_bandwidth=d.auto_bandwidth,
+            averaging_samples=d.oversampling,
         )
         ia = _build_ia(d, cv_freqs[0])
         return CfConfig(

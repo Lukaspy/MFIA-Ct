@@ -70,6 +70,7 @@ class SweepMetadata:
     fixed_frequency_hz: Optional[float] = None  # the held test frequency for C-V
     settling_tcs: Optional[float] = None  # per-point AC settling (demod TCs)
     current_range_a: Optional[float] = None  # fixed input range (A); None = auto
+    oversampling: Optional[int] = None  # demod samples averaged per point
 
 
 @dataclass
@@ -204,8 +205,9 @@ def make_metadata_from_config(
     """
     when = (timestamp or datetime.now()).isoformat(timespec="seconds")
     vrms = cfg.ia.ac_amplitude_v  # CfConfig stores this in V RMS by convention
-    # Settling lives on the swept-axis settings: cv_bias for C-V, sweep for C-f.
-    settling = cfg.cv_bias.settling_tcs if sweep_type == "C-V" else cfg.sweep.settling_tcs
+    # Settling + averaging live on the swept-axis settings (cv_bias / sweep).
+    swept = cfg.cv_bias if sweep_type == "C-V" else cfg.sweep
+    settling = swept.settling_tcs
     return SweepMetadata(
         device_id=cfg.run.device_id,
         substrate_type=cfg.run.substrate_type,
@@ -223,6 +225,7 @@ def make_metadata_from_config(
         fixed_frequency_hz=fixed_frequency_hz,
         settling_tcs=settling,
         current_range_a=cfg.ia.current_range_a,
+        oversampling=swept.averaging_samples,
     )
 
 
@@ -285,6 +288,8 @@ def write_sweep_csv(result: SweepResult, path: Path | str) -> Path:
         f.write(f"# amplitude_vpk: {meta.amplitude_vpk}\n")
         if meta.settling_tcs is not None:
             f.write(f"# settling_tcs: {meta.settling_tcs}\n")
+        if meta.oversampling is not None:
+            f.write(f"# oversampling: {meta.oversampling}\n")
         crange = "auto" if meta.current_range_a is None else meta.current_range_a
         f.write(f"# current_range_a: {crange}\n")
         if meta.optical_power_mw is not None:
