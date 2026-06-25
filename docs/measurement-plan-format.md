@@ -51,6 +51,7 @@ override any of these inline (see *Blocks*).
 | `dark_settle_s` | `10` | Dark-bracket dwell (drift/recovery check). |
 | `settling_tcs` | `7` | **Per-point AC settling**, in demod time constants — instrument-set, unavoidable at low frequency. |
 | `auto_bandwidth` | `true` | Let the MFIA pick the demod bandwidth per point. |
+| `current_range_a` | `auto` | Fixed current-input range in **amps** (e.g. `1.0e-7` = 100 nA), or `auto`. Pin a sensitive range for high-Z / low-current sweeps where auto-range misbehaves at low f. A wide C-f spans many decades of impedance, so one fixed range can't fit it — pin it only on fixed-frequency C-V or narrow low-f-only blocks, and validate against a known reference. |
 | `freq.start_hz` | `1` | C-f sweep low-frequency floor (Hz). |
 | `freq.stop_hz` | `300000` | C-f sweep ceiling (Hz). |
 | `freq.points_per_decade` | `10` | C-f log-sweep density. |

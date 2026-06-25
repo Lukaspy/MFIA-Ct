@@ -1,0 +1,78 @@
+# MFIA-cf TEST plan — fast hypothesis checks for 2013-3 (n-Si). NOT the campaign.
+#
+# Quick -2 V dark sweeps over a narrow low-f window (1 Hz–1 kHz), varying ONE
+# knob at a time, to find what recovers the B1500 ground truth before
+# committing the full overnight plan.
+#
+#   B1500 target (dark, -2 V): ~1.3 nF / 16 MΩ at 1 kHz.
+#
+# Each sweep records its current range / amplitude / settling in the CSV
+# header, so after the run point qa_check at the output folder:
+#     ./.venv/bin/python scripts/qa_check.py /data/mfia/2013-3_test
+# and it lists range + amp + verdict per sweep, in run order (= block order).
+#
+# Compensate (open/short, "standard" precision) over ~1 Hz–1 kHz first. The
+# whole plan is a handful of short sweeps — minutes, not hours.
+
+device:
+  id: "2013-3"
+  substrate: "n-Si"
+  notes: "TEST — range/amplitude hypothesis sweep (not the campaign)"
+
+output_dir: "/data/mfia/2013-3_test"
+
+defaults:
+  amplitude_mv_rms: 100
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 10
+  dark_settle_s: 10
+  settling_tcs: 15
+  auto_bandwidth: true
+  current_range_a: auto
+  freq:
+    start_hz: 1
+    stop_hz: 1000        # narrow low-f window so a single fixed range fits
+    points_per_decade: 8 # coarse — this is a quick check, not the final data
+
+blocks:
+  # ---- Hypothesis 1: pin the current range at the hard bias (-2 V dark) ----
+  # auto is the baseline (reproduces the corruption); then bracket the range.
+  # Device passes ~50 nA DC + a few nA AC at -2 V, so 10 nA may overload and
+  # 1 µA may be too coarse — 100 nA is the leading guess.
+  - name: "H1a: -2V dark, AUTO range"
+    type: c-f
+    bias: [-2]
+    illumination: {dark_only: true}
+
+  - name: "H1b: -2V dark, 1 uA range"
+    type: c-f
+    bias: [-2]
+    current_range_a: 1.0e-6
+    illumination: {dark_only: true}
+
+  - name: "H1c: -2V dark, 100 nA range"
+    type: c-f
+    bias: [-2]
+    current_range_a: 1.0e-7
+    illumination: {dark_only: true}
+
+  - name: "H1d: -2V dark, 10 nA range"
+    type: c-f
+    bias: [-2]
+    current_range_a: 1.0e-8
+    illumination: {dark_only: true}
+
+  # ---- Hypothesis 2: amplitude (auto range, -2 V dark): 30 vs 100 mV ----
+  # 100 mV is in H1a above; this adds the 30 mV point to compare SNR.
+  - name: "H2: -2V dark, 30 mV, AUTO"
+    type: c-f
+    bias: [-2]
+    amplitude_mv_rms: 30
+    illumination: {dark_only: true}
+
+  # ---- Control: easy bias (+1 V dark) should already be clean ----
+  - name: "C: +1V dark control, AUTO"
+    type: c-f
+    bias: [1]
+    illumination: {dark_only: true}

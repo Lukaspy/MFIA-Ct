@@ -160,3 +160,31 @@ def test_gui_load_plan_stages_into_queue(qtbot, monkeypatch) -> None:
     assert w.queue_list.count() == 6
     assert "C-f" in w.queue_list.item(0).text()
     assert any("C-V" in w.queue_list.item(i).text() for i in range(6))
+
+
+def test_current_range_default_auto_and_override() -> None:
+    # Default (no current_range_a) -> auto (None on IASettings).
+    base = parse_plan(_minimal())[0]
+    assert base.ia.current_range_a is None
+    # Plan-level default + per-block override, accepting number or 'auto'.
+    plan = _minimal()
+    plan["defaults"] = {"current_range_a": 1.0e-6}
+    plan["blocks"] = [
+        {"name": "a", "type": "c-f", "bias": [0], "illumination": {"dark_only": True}},
+        {"name": "b", "type": "c-f", "bias": [0], "current_range_a": 1.0e-7,
+         "illumination": {"dark_only": True}},
+        {"name": "c", "type": "c-f", "bias": [0], "current_range_a": "auto",
+         "illumination": {"dark_only": True}},
+    ]
+    a, b, c = parse_plan(plan)
+    assert a.ia.current_range_a == 1.0e-6   # plan default
+    assert b.ia.current_range_a == 1.0e-7   # block override
+    assert c.ia.current_range_a is None     # 'auto' -> None
+
+
+def test_example_plans_load() -> None:
+    for name in ("plan_2013-3_n-Si.yaml", "plan_2013-3_test.yaml"):
+        p = EXAMPLE.parent / name
+        if p.exists():
+            configs = load_plan(p)
+            assert configs, f"{name} produced no campaigns"

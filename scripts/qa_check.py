@@ -32,6 +32,18 @@ JUMP_RATIO = 5.0      # adjacent |Z| ratio that counts as a range step
 LOSS_DEG = 45.0       # |phase| below this is loss-dominated
 
 
+def _header(path: str) -> dict:
+    """Pull the settings we vary in test plans from the # comment header."""
+    h = {}
+    for ln in open(path):
+        if not ln.startswith("#"):
+            break
+        if ":" in ln:
+            k, _, v = ln[1:].partition(":")
+            h[k.strip()] = v.strip()
+    return h
+
+
 def _read(path: str):
     rows = [ln for ln in open(path) if not ln.startswith("#")]
     out = {"f": [], "phase": [], "g": [], "z": []}
@@ -76,11 +88,15 @@ def check(path: str) -> dict:
             break
     clean = (neg_g == 0 and worst_jump <= JUMP_RATIO and reaches_cap
              and inductive == 0)
+    hdr = _header(path)
     return {
         "name": os.path.basename(path), "n": n, "neg_g": neg_g,
         "max_abs_phase": max_abs_phase, "worst_jump": worst_jump,
         "jump_at": jump_at, "cross": cross, "clean": clean, "empty": False,
         "inductive": inductive, "min_phase": min_phase,
+        "range": hdr.get("current_range_a", "?"),
+        "amp_vrms": hdr.get("amplitude_vrms", "?"),
+        "settling": hdr.get("settling_tcs", "?"),
     }
 
 
@@ -123,11 +139,19 @@ def main(argv=None) -> int:
                   f"(capacitive above, loss-dominated below)")
         return 0 if r["clean"] else 1
 
-    print(f"{'file':<50} {'neg-G':>6} {'ind':>5} {'jump':>7} {'min ϕ':>6}  verdict")
+    def _amp_mv(v):
+        try:
+            return f"{float(v) * 1000:g}"
+        except (TypeError, ValueError):
+            return str(v)
+
+    print(f"{'file':<42} {'range':>8} {'mV':>5} {'neg-G':>6} {'ind':>4} "
+          f"{'jump':>6} {'min ϕ':>6}  verdict")
     for r in results:
         v = "CLEAN" if r["clean"] else "FLAG"
-        print(f"{r['name'][:50]:<50} {r['neg_g']:>6} {r['inductive']:>5} "
-              f"{r['worst_jump']:>6.1f}x {r['min_phase']:>5.0f}°  {v}")
+        print(f"{r['name'][:42]:<42} {str(r['range'])[:8]:>8} {_amp_mv(r['amp_vrms']):>5} "
+              f"{r['neg_g']:>6} {r['inductive']:>4} {r['worst_jump']:>5.1f}x "
+              f"{r['min_phase']:>5.0f}°  {v}")
     print(f"\n{len(results)-len(flagged)}/{len(results)} CLEAN, {len(flagged)} flagged.")
     if flagged:
         ng = sum(1 for r in flagged if r["neg_g"])

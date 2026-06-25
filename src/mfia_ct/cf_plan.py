@@ -68,11 +68,26 @@ class _Defaults:
     dark_settle_s: float = 10.0
     settling_tcs: float = 7.0
     auto_bandwidth: bool = True
+    # Fixed current-input range in amps (e.g. 1.0e-7 for 100 nA); None / "auto"
+    # = auto-range. Pin a sensitive range for high-Z / low-current sweeps.
+    current_range_a: float | None = None
     # C-f frequency sweep floor/ceiling.
     start_hz: float = 1.0
     stop_hz: float = 300_000.0
     points_per_decade: int = 10
     log_spacing: bool = True
+
+
+def _parse_current_range(value: Any, default: float | None) -> float | None:
+    """YAML current-range value -> amps or None. Accepts a number (amps),
+    or 'auto' / null for auto-range."""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        if value.strip().lower() in ("auto", "none", ""):
+            return None
+        return float(value)
+    return float(value)
 
 
 def _enum_from(value: Any, enum_cls: type, field: str) -> Any:
@@ -107,6 +122,9 @@ def _merge_defaults(base: _Defaults, raw: dict[str, Any]) -> _Defaults:
         dark_settle_s=float(raw.get("dark_settle_s", out.dark_settle_s)),
         settling_tcs=float(raw.get("settling_tcs", out.settling_tcs)),
         auto_bandwidth=bool(raw.get("auto_bandwidth", out.auto_bandwidth)),
+        current_range_a=_parse_current_range(
+            raw.get("current_range_a", out.current_range_a), out.current_range_a
+        ),
         start_hz=float(freq.get("start_hz", out.start_hz)),
         stop_hz=float(freq.get("stop_hz", out.stop_hz)),
         points_per_decade=int(freq.get("points_per_decade", out.points_per_decade)),
@@ -120,7 +138,7 @@ def _block_defaults(base: _Defaults, block: dict[str, Any]) -> _Defaults:
     deep-anchor block). ``freq`` overrides nest under ``freq:`` as in defaults."""
     keys = {
         "amplitude_mv_rms", "terminal_mode", "equiv_circuit", "device_settle_s",
-        "dark_settle_s", "settling_tcs", "auto_bandwidth", "freq",
+        "dark_settle_s", "settling_tcs", "auto_bandwidth", "current_range_a", "freq",
     }
     inline = {k: block[k] for k in keys if k in block}
     return _merge_defaults(base, inline) if inline else base
@@ -268,6 +286,7 @@ def _build_ia(d: _Defaults, init_freq_hz: float) -> IASettings:
         equiv_circuit=d.equiv_circuit,
         terminal_mode=d.terminal_mode,
         imp_index=0,
+        current_range_a=d.current_range_a,
     )
 
 
