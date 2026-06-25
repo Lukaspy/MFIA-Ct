@@ -68,6 +68,12 @@ class IASettings:
     equiv_circuit: EquivCircuit = EquivCircuit.CP_RP
     terminal_mode: TerminalMode = TerminalMode.FOUR_TERMINAL
     imp_index: int = 0
+    # Fixed current-input range (A) for the impedance measurement. ``None`` =
+    # auto-range (the default, and what the sweeper normally wants). Pin a
+    # sensitive range (e.g. 10e-9) for a high-impedance / low-current
+    # measurement where auto-range misbehaves at the low-frequency end —
+    # validate the pinned range against a known reference (e.g. the B1500).
+    current_range_a: float | None = None
 
 
 @dataclass

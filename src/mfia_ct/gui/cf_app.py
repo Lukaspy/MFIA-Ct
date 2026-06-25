@@ -112,6 +112,14 @@ def _int_spin(value: int, lo: int, hi: int) -> QSpinBox:
     return s
 
 
+def _fmt_si_amps(a: float) -> str:
+    """Compact current label for the range dropdown, e.g. 1e-8 -> '10 nA'."""
+    for scale, unit in ((1e-3, "mA"), (1e-6, "µA"), (1e-9, "nA")):
+        if a >= scale:
+            return f"{a / scale:g} {unit}"
+    return f"{a:g} A"
+
+
 # --- Worker ------------------------------------------------------------------
 
 
@@ -520,9 +528,21 @@ class CfControlPanel(QWidget):
             self.terminal_mode.addItem(tm.value, userData=tm)
         # C-f default: 2-terminal (high-Z devices, full ±10 V bias range).
         self.terminal_mode.setCurrentText(TerminalMode.TWO_TERMINAL.value)
+        # Current-input range: Auto by default. Pin a sensitive range for
+        # high-Z / low-current sweeps where auto-range misbehaves at low f.
+        self.current_range = QComboBox()
+        self.current_range.addItem("Auto", userData=None)
+        for r in (1e-9, 10e-9, 100e-9, 1e-6, 10e-6, 100e-6, 1e-3, 10e-3):
+            self.current_range.addItem(_fmt_si_amps(r), userData=r)
+        self.current_range.setToolTip(
+            "Fixed MFIA current-input range. Auto is normal; pin a sensitive\n"
+            "range (e.g. 10 nA) for high-impedance / low-current sweeps and\n"
+            "check the result against a known reference."
+        )
         ia_form.addRow("AC amplitude", amp_holder)
         ia_form.addRow("Equivalent circuit", self.equiv)
         ia_form.addRow("Terminal mode", self.terminal_mode)
+        ia_form.addRow("Current range", self.current_range)
         layout.addWidget(ia)
 
         # ---- Swept-axis controls: C-f and C-V pages swap by sweep type ----
@@ -714,6 +734,7 @@ class CfControlPanel(QWidget):
             equiv_circuit=EquivCircuit(self.equiv.currentText()),
             terminal_mode=self.terminal_mode.currentData(),
             imp_index=0,
+            current_range_a=self.current_range.currentData(),  # None = auto
         )
         sweep = SweeperSettings(
             start_hz=self.start_hz.value(),

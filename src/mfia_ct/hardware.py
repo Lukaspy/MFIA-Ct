@@ -157,12 +157,22 @@ class MFIA:
             (f"/{dev}/imps/{ia.imp_index}/mode", _TERMINAL_MODE_NODE_VALUE[ia.terminal_mode]),
             (f"/{dev}/imps/{ia.imp_index}/auto/output", 0),
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 1),  # sweeper expects auto-BW on
-            (f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 1),
             (f"/{dev}/imps/{ia.imp_index}/output/amplitude", amp_pk),
             (f"/{dev}/imps/{ia.imp_index}/bias/value", ia.dc_bias_v),
             (f"/{dev}/imps/{ia.imp_index}/bias/enable", 1),
             (f"/{dev}/imps/{ia.imp_index}/model", model),
         ]
+        # Current-input range: auto by default. Pinning a fixed sensitive range
+        # is the lever for high-Z / low-current sweeps (a few nA at low f),
+        # where auto-range can misbehave under DC bias. Voltage input range
+        # stays auto — the drive amplitude is known and modest.
+        if ia.current_range_a is None:
+            settings.append((f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 1))
+        else:
+            settings.append((f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 0))
+            settings.append(
+                (f"/{dev}/imps/{ia.imp_index}/current/range", float(ia.current_range_a))
+            )
         self.daq.set(settings)
         self.daq.sync()
 
