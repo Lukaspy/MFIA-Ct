@@ -56,7 +56,6 @@ def test_configure_enables_the_signal_output() -> None:
     cfgs = load_plan(EXAMPLES / "plan_2013-3_test.yaml")
     s = _configure(cfgs[0])
     assert s[f"/{DEV}/imps/0/output/on"] == 1
-    assert s[f"/{DEV}/sigouts/0/on"] == 1
 
 
 def test_cf_output_range_uses_block_worst_case_bias() -> None:
