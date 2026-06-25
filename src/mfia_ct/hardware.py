@@ -155,7 +155,12 @@ class MFIA:
         settings = [
             (f"/{dev}/imps/{ia.imp_index}/enable", 1),
             (f"/{dev}/imps/{ia.imp_index}/mode", _TERMINAL_MODE_NODE_VALUE[ia.terminal_mode]),
-            (f"/{dev}/imps/{ia.imp_index}/auto/output", 0),
+            # Auto OUTPUT RANGE on, matching the LabOne webUI: the MFIA sizes the
+            # output to fit AC amplitude + DC bias. With it off and no explicit
+            # output/range, the output runs at a leftover (often too-small) range
+            # and overloads (OVO) the moment a DC bias is applied. amp + bias are
+            # constant across a C-f sweep, so auto won't re-range mid-sweep.
+            (f"/{dev}/imps/{ia.imp_index}/auto/output", 1),
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 1),  # sweeper expects auto-BW on
             (f"/{dev}/imps/{ia.imp_index}/output/amplitude", amp_pk),
             (f"/{dev}/imps/{ia.imp_index}/bias/value", ia.dc_bias_v),
