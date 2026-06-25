@@ -120,6 +120,7 @@ class MFIA:
             (f"/{dev}/imps/{ia.imp_index}/enable", 1),
             (f"/{dev}/imps/{ia.imp_index}/mode", _TERMINAL_MODE_NODE_VALUE[ia.terminal_mode]),
             (f"/{dev}/imps/{ia.imp_index}/auto/output", 0),
+            (f"/{dev}/sigouts/{ia.imp_index}/on", 1),  # enable the output stage
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 0),
             (f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 0),
             (f"/{dev}/imps/{ia.imp_index}/freq", ia.frequency_hz),
@@ -177,6 +178,11 @@ class MFIA:
             # so it can't shrink the range back down to the AC amplitude.
             (f"/{dev}/imps/{ia.imp_index}/auto/output", 0),
             (f"/{dev}/sigouts/{ia.imp_index}/range", output_range),
+            # ENABLE the signal output. Without this the tool drove nothing when
+            # the output happened to be off (after disable_everything / the webUI
+            # being closed) — every sweep read GΩ "open" until a power-cycle.
+            # imps/enable alone does NOT turn the output stage on via the API.
+            (f"/{dev}/sigouts/{ia.imp_index}/on", 1),
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 1),  # sweeper expects auto-BW on
             (f"/{dev}/imps/{ia.imp_index}/output/amplitude", amp_pk),
             (f"/{dev}/imps/{ia.imp_index}/bias/value", ia.dc_bias_v),

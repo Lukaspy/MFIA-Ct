@@ -50,6 +50,13 @@ def test_cf_output_range_covers_bias_and_amp() -> None:
     assert s[f"/{DEV}/imps/0/auto/inputrange"] == 1        # input range stays auto
 
 
+def test_configure_enables_the_signal_output() -> None:
+    """The output stage must be turned ON — relying on it being on read GΩ open."""
+    cfgs = load_plan(EXAMPLES / "plan_2013-3_test.yaml")
+    s = _configure(cfgs[0])
+    assert s[f"/{DEV}/sigouts/0/on"] == 1
+
+
 def test_cf_output_range_uses_block_worst_case_bias() -> None:
     """A bias-ladder block sizes to the largest |bias| it will visit (±4 V)."""
     cfgs = load_plan(EXAMPLES / "plan_2013-3_n-Si.yaml")
