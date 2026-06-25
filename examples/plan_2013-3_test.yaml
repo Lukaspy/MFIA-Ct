@@ -1,78 +1,54 @@
-# MFIA-cf TEST plan — RETEST (v3) for 2013-3 (n-Si). NOT the campaign.
+# MFIA-cf TEST plan — validate the tool against the LabOne webUI. NOT the campaign.
 #
-# v1/v2 lessons + Zurich's published high-Z recipe (their 1 TΩ measurement):
-#   - manual (fixed) sensitive current range  [v1: pinning killed the jumps]
-#   - HIGH oversampling/averaging              [we'd been running averaging = 1!]
-#   - modest amplitude for OUR nonlinear DUT   [v1: 100 mV made it worse; ZI's
-#     8 V only works on a linear resistor — our IV caps us ~100 mV]
+# The whole high-Z saga turned out to be (1) the drain miswired to HPOT instead
+# of HCUR, and (2) a tool bug: auto-output sized the output range to the 30 mV AC
+# and ignored the DC bias, so any bias over-ranged the output -> OVO -> garbage.
+# Wired right + an explicit output range, the webUI reads a clean capacitor on
+# plain AUTO range. So this plan is deliberately boring: auto range, 30 mV, no
+# pinned range, no oversampling — just confirm the tool matches the webUI.
 #
-# So v3 tests the full ZI recipe. The new lever is OVERSAMPLING. A fixed range
-# only fits where |Z| is ~flat, i.e. the low-f resistive plateau (below the RC
-# corner), so the pinned blocks use a narrow 1–300 Hz window.
+#   Goal 1 (0 V): should overlay your webUI 0 V sweep almost exactly — a clean
+#     capacitor, |Z| falling ~16 MΩ (1 Hz) toward ~hundreds of Ω at high f,
+#     phase a smooth -80° -> 0°. POSITIVE G throughout.
+#   Goal 2 (-2 V): no OVO (the output-range fix), and a clean biased capacitor
+#     shifted from the 0 V curve (more depletion).
 #
-#   Targets (from B1500 / IV, dark): the low-f plateau should read a clean,
-#   POSITIVE-G resistance ~16–37 MΩ at -2 V (and similar at 0 V), phase near 0°.
-#   Wide blocks should hit ~1.3 nF / 16 MΩ at the kHz end (B1500 overlap) and
-#   confirm contact (~1 nF at high f).
-#
-# WARNING: oversampling multiplies per-point time — at 1 Hz it's slow. Kept to
-# 100 here (vs ZI's 800–2000); push higher only if it clearly helps.
-#
-# Header records range/amp/settling/oversampling:
-#     ./.venv/bin/python scripts/qa_check.py /data/mfia/2013-3_test
-# Compensate open/short (standard) over the sweep range first.
+# If 0 V matches the webUI, the measurement chain is correct and the campaign
+# plan is trustworthy. If 30 mV looks noisy vs the webUI's 300 mV, bump
+# amplitude a little or add modest oversampling — but try it clean first.
+# Compensate open/short (standard) over the range first.
 
 device:
   id: "2013-3"
   substrate: "n-Si"
-  notes: "TEST v3 — ZI high-Z recipe (fixed range + oversampling), not the campaign"
+  notes: "TEST — match the webUI (auto range, 30 mV), confirm 0 V overlay + -2 V no-OVO"
 
-output_dir: "/home/lukas/Documents/capacitance_measurements/ranging_test/test3"
+output_dir: "/home/lukas/Documents/capacitance_measurements/ranging_test/test4"
 
 defaults:
-  amplitude_mv_rms: 30          # modest (v1: more was worse on this DUT)
+  amplitude_mv_rms: 30
   terminal_mode: 2-terminal
   equiv_circuit: Cp||Rp
   device_settle_s: 10
   dark_settle_s: 10
   settling_tcs: 15
   auto_bandwidth: true
-  oversampling: 1               # blocks below crank this — the key new lever
-  current_range_a: auto
+  oversampling: 1            # off — auto range alone should match the webUI
+  current_range_a: auto      # AUTO, like the webUI (no pinning)
   freq:
     start_hz: 1
-    stop_hz: 30000
-    points_per_decade: 8
+    stop_hz: 500000
+    points_per_decade: 10
 
 blocks:
-  # ---- Does oversampling alone help? (wide, auto range) ----
-  - name: "A1: -2V dark, auto, oversampling 1 (baseline)"
-    type: c-f
-    bias: [-2]
-    illumination: {dark_only: true}
-
-  - name: "A2: -2V dark, auto, oversampling 100"
-    type: c-f
-    bias: [-2]
-    oversampling: 100
-    illumination: {dark_only: true}
-
-  # ---- Full ZI recipe: fixed sensitive range + oversampling, narrow low-f ----
-  # 1–300 Hz is the resistive plateau, so one range fits. -2 V passes ~50 nA DC
-  # so 100 nA accommodates it; goal is a clean positive-G ~20 MΩ reading.
-  - name: "A3: -2V dark, 100 nA, oversampling 100, 1-300 Hz"
-    type: c-f
-    bias: [-2]
-    current_range_a: 1.0e-7
-    oversampling: 100
-    freq: {start_hz: 1, stop_hz: 300, points_per_decade: 10}
-    illumination: {dark_only: true}
-
-  # ---- Best case: 0 V (low DC leakage ~2 nA) → most-sensitive range fits ----
-  - name: "B1: 0V dark, 10 nA, oversampling 100, 1-300 Hz"
+  # Apples-to-apples vs the webUI 0 V sweep.
+  - name: "0V dark (should overlay webUI)"
     type: c-f
     bias: [0]
-    current_range_a: 1.0e-8
-    oversampling: 100
-    freq: {start_hz: 1, stop_hz: 300, points_per_decade: 10}
+    illumination: {dark_only: true}
+
+  # The output-range fix: -2 V must run with OVO dark and read a clean cap.
+  - name: "-2V dark (biased, no OVO)"
+    type: c-f
+    bias: [-2]
     illumination: {dark_only: true}

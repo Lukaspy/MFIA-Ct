@@ -152,25 +152,38 @@ class MFIA:
         model = _EQUIV_CIRCUIT_NODE_VALUE[ia.equiv_circuit]
         amp_pk = ia.ac_amplitude_v * math.sqrt(2.0)
 
+        # OUTPUT RANGE must cover the largest DC bias this block visits + the AC
+        # peak, else the bias over-ranges the output stage (OVO) and the sweep
+        # reads garbage. Auto-output sizes only to the AC amplitude and ignores
+        # the bias, so we set the range explicitly — the LabOne webUI's
+        # manual-range approach. configure runs once per block and set_dc_bias
+        # only steps the value, so size to the block's worst-case |bias| here.
+        # The MFIA rounds up to the next available output range.
+        if cfg.sweep_type.name == "C_V":
+            max_bias = max(abs(cfg.cv_bias.start_v), abs(cfg.cv_bias.stop_v))
+        else:
+            biases = cfg.bias.values_v or [ia.dc_bias_v]
+            max_bias = max(abs(float(b)) for b in biases)
+        output_range = (max_bias + amp_pk) * 1.05
+
         settings = [
             (f"/{dev}/imps/{ia.imp_index}/enable", 1),
             (f"/{dev}/imps/{ia.imp_index}/mode", _TERMINAL_MODE_NODE_VALUE[ia.terminal_mode]),
-            # Auto OUTPUT RANGE on, matching the LabOne webUI: the MFIA sizes the
-            # output to fit AC amplitude + DC bias. With it off and no explicit
-            # output/range, the output runs at a leftover (often too-small) range
-            # and overloads (OVO) the moment a DC bias is applied. amp + bias are
-            # constant across a C-f sweep, so auto won't re-range mid-sweep.
-            (f"/{dev}/imps/{ia.imp_index}/auto/output", 1),
+            # Manual output range sized to bias + amp (see above); auto-output OFF
+            # so it can't shrink the range back down to the AC amplitude.
+            (f"/{dev}/imps/{ia.imp_index}/auto/output", 0),
+            (f"/{dev}/sigouts/{ia.imp_index}/range", output_range),
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 1),  # sweeper expects auto-BW on
             (f"/{dev}/imps/{ia.imp_index}/output/amplitude", amp_pk),
             (f"/{dev}/imps/{ia.imp_index}/bias/value", ia.dc_bias_v),
             (f"/{dev}/imps/{ia.imp_index}/bias/enable", 1),
             (f"/{dev}/imps/{ia.imp_index}/model", model),
         ]
-        # Current-input range: auto by default. Pinning a fixed sensitive range
-        # is the lever for high-Z / low-current sweeps (a few nA at low f),
-        # where auto-range can misbehave under DC bias. Voltage input range
-        # stays auto — the drive amplitude is known and modest.
+        # Current-input range: AUTO by default — the webUI runs auto and reads
+        # the high-Z low-f tail cleanly once wired right, so auto is the norm.
+        # Pinning a fixed range remains available (current_range_a) but is rarely
+        # needed; a wide C-f can't fit one fixed range anyway (it overloads at
+        # high f where the cap draws µA). Voltage input range stays auto.
         if ia.current_range_a is None:
             settings.append((f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 1))
         else:

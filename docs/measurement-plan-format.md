@@ -51,8 +51,8 @@ override any of these inline (see *Blocks*).
 | `dark_settle_s` | `10` | Dark-bracket dwell (drift/recovery check). |
 | `settling_tcs` | `7` | **Per-point AC settling**, in demod time constants — instrument-set, unavoidable at low frequency. |
 | `auto_bandwidth` | `true` | Let the MFIA pick the demod bandwidth per point. |
-| `oversampling` | `1` | Demod samples averaged per point. `1` = none. Crank it (100s–1000s) to pull a few-pA signal out of the noise for high-Z / low-frequency sweeps — ZI's high-impedance recipe. Multiplies per-point time, so it's slow at low f. |
-| `current_range_a` | `auto` | Fixed current-input range in **amps** (e.g. `1.0e-7` = 100 nA), or `auto`. Pin a sensitive range for high-Z / low-current sweeps where auto-range misbehaves at low f. A wide C-f spans many decades of impedance, so one fixed range can't fit it — pin it only on fixed-frequency C-V or narrow low-f-only blocks, and validate against a known reference. |
+| `oversampling` | `1` | Demod samples averaged per point. `1` = none (the norm — auto range reads the high-Z low-f tail cleanly when wired right). A rarely-needed fallback for low-f SNR at small amplitude; multiplies per-point time, so it's slow at low f. |
+| `current_range_a` | `auto` | Fixed current-input range in **amps** (e.g. `1.0e-7` = 100 nA), or `auto`. **Leave it `auto`** — that's what the webUI uses and it handles the whole band. A wide C-f spans many decades of impedance, so a pinned range overloads at high f (the cap draws µA); only pin on a narrow low-f-only block, and validate against a reference. |
 | `freq.start_hz` | `1` | C-f sweep low-frequency floor (Hz). |
 | `freq.stop_hz` | `300000` | C-f sweep ceiling (Hz). |
 | `freq.points_per_decade` | `10` | C-f log-sweep density. |
