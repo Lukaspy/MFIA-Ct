@@ -27,7 +27,7 @@ device:
   substrate: "n-Si"
   notes: "TEST v3 — ZI high-Z recipe (fixed range + oversampling), not the campaign"
 
-output_dir: "/data/mfia/2013-3_test"
+output_dir: "/home/lukas/Documents/capacitance_measurements/ranging_test/test3"
 
 defaults:
   amplitude_mv_rms: 30          # modest (v1: more was worse on this DUT)
