@@ -231,6 +231,10 @@ class CfExperiment:
                 )
 
     def _apply_illumination(self, step: IlluminationStep) -> None:
+        # Drop the drive for lit steps (and restore it for dark) when a separate
+        # light amplitude is configured. Set before the sweep regardless of LED.
+        if self.cfg.ia.light_ac_amplitude_v is not None:
+            self.backend.set_amplitude(self.cfg.ia.amplitude_for(step.is_dark))
         if self.led is None:
             return
         if step.is_dark:

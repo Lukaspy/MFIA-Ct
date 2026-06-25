@@ -25,13 +25,15 @@ device:
 output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3"
 
 defaults:
-  amplitude_mv_rms: 100         # validated: 30 mV too small for the high-Z low-f
-                                # tail (~nA drive); 100 mV clean at 0 V & linear.
-                                # NOTE: -2 V low-f may be DC-leakage-limited (the
-                                # 54 nA leakage forces a coarse input range) — see
-                                # plan_2013-3_test (test5). high-f is clean at all
-                                # biases regardless. Drop amplitude for bright-light
-                                # blocks if the lit IV goes nonlinear.
+  amplitude_mv_rms: 100         # dark high-Z tail needs ~100 mV (30 mV too small —
+                                # ~nA drive can't lock auto-range); linear in dark.
+  light_amplitude_mv_rms: 40    # lit steps drop to a linear level: under light the
+                                # IV is steeper, but the photocurrent already gives
+                                # a clean low-f reading, so 40 mV is enough. Dark
+                                # steps / brackets keep the 100 mV high-Z drive.
+                                # (Per-step, applied automatically by dark-vs-lit.)
+                                # NOTE: -2 V (and ±7 V) low-f may be DC-leakage-
+                                # limited; high-f is clean at all biases. See test5.
   terminal_mode: 2-terminal
   equiv_circuit: Cp||Rp
   device_settle_s: 10
@@ -47,9 +49,9 @@ defaults:
 
 blocks:
   # ---- A: dark baseline / QA at the anchor and 0 V ----
-  - name: "A: dark baseline (-2 V, 0 V)"
+  - name: "A: dark baseline (-7, -2, 0, +7 V)"
     type: c-f
-    bias: [-2, 0]
+    bias: [-7, -2, 0, 7]
     illumination: {dark_only: true}
 
   # ---- B: spectral grid — λ × intensity matrix at the reverse-active anchor ----
@@ -67,9 +69,11 @@ blocks:
 
   # ---- C: bias ladder @ 625 nm (dark vs bright) ----
   # Mott-Schottky 1/C² vs V and the light-effect collapse, full band per bias.
-  - name: "C: bias ladder @ 625 nm"
+  # Extended to ±7 V (saturation) — we have ±10 V in 2-terminal. The output range
+  # auto-sizes to each bias (tool handles it); high-f stays clean into saturation.
+  - name: "C: bias ladder @ 625 nm (to ±7 V saturation)"
     type: c-f
-    bias: [-4, -2, -1, 0, 1, 2, 4]
+    bias: [-7, -4, -2, -1, 0, 1, 2, 4, 7]
     illumination:
       mode: fixed
       steps:
@@ -82,7 +86,7 @@ blocks:
   - name: "E: C-V dispersion (1k / 100 / 10 / 1 Hz)"
     type: c-v
     frequencies: [1000, 100, 10, 1]
-    bias: {start_v: -4, stop_v: 4, points: 101}
+    bias: {start_v: -7, stop_v: 7, points: 141}    # ±7 V into saturation, ~0.1 V step
     illumination:
       mode: matrix
       dark_bracket: per-wavelength

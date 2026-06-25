@@ -204,7 +204,8 @@ def make_metadata_from_config(
     ``fixed_frequency_hz`` set to the held test frequency.
     """
     when = (timestamp or datetime.now()).isoformat(timespec="seconds")
-    vrms = cfg.ia.ac_amplitude_v  # CfConfig stores this in V RMS by convention
+    # Actual drive for this step (lit steps may use a lower light amplitude).
+    vrms = cfg.ia.amplitude_for(step.is_dark)
     # Settling + averaging live on the swept-axis settings (cv_bias / sweep).
     swept = cfg.cv_bias if sweep_type == "C-V" else cfg.sweep
     settling = swept.settling_tcs

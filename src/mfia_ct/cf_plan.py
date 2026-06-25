@@ -62,6 +62,9 @@ class _Defaults:
     """
 
     amplitude_mv_rms: float = 30.0
+    # AC amplitude for LIT steps only (mV RMS); None = use amplitude_mv_rms.
+    # Keep the high dark drive for the high-Z tail, drop it under bright light.
+    light_amplitude_mv_rms: float | None = None
     terminal_mode: TerminalMode = TerminalMode.TWO_TERMINAL
     equiv_circuit: EquivCircuit = EquivCircuit.CP_RP
     device_settle_s: float = 10.0
@@ -115,6 +118,11 @@ def _merge_defaults(base: _Defaults, raw: dict[str, Any]) -> _Defaults:
     out = replace(
         out,
         amplitude_mv_rms=float(raw.get("amplitude_mv_rms", out.amplitude_mv_rms)),
+        light_amplitude_mv_rms=(
+            float(raw["light_amplitude_mv_rms"])
+            if raw.get("light_amplitude_mv_rms") is not None
+            else out.light_amplitude_mv_rms
+        ),
         terminal_mode=_enum_from(
             raw.get("terminal_mode", out.terminal_mode), TerminalMode, "terminal_mode"
         ),
@@ -141,9 +149,9 @@ def _block_defaults(base: _Defaults, block: dict[str, Any]) -> _Defaults:
     """A block may override any default inline (e.g. a longer settle for the
     deep-anchor block). ``freq`` overrides nest under ``freq:`` as in defaults."""
     keys = {
-        "amplitude_mv_rms", "terminal_mode", "equiv_circuit", "device_settle_s",
-        "dark_settle_s", "settling_tcs", "auto_bandwidth", "oversampling",
-        "current_range_a", "freq",
+        "amplitude_mv_rms", "light_amplitude_mv_rms", "terminal_mode",
+        "equiv_circuit", "device_settle_s", "dark_settle_s", "settling_tcs",
+        "auto_bandwidth", "oversampling", "current_range_a", "freq",
     }
     inline = {k: block[k] for k in keys if k in block}
     return _merge_defaults(base, inline) if inline else base
@@ -287,6 +295,10 @@ def _build_ia(d: _Defaults, init_freq_hz: float) -> IASettings:
     return IASettings(
         frequency_hz=init_freq_hz,
         ac_amplitude_v=d.amplitude_mv_rms / 1000.0,  # mV RMS → V RMS
+        light_ac_amplitude_v=(
+            None if d.light_amplitude_mv_rms is None
+            else d.light_amplitude_mv_rms / 1000.0
+        ),
         dc_bias_v=0.0,  # set per bias by the experiment loop
         equiv_circuit=d.equiv_circuit,
         terminal_mode=d.terminal_mode,

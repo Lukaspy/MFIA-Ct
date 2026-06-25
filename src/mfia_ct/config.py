@@ -74,6 +74,18 @@ class IASettings:
     # measurement where auto-range misbehaves at the low-frequency end —
     # validate the pinned range against a known reference (e.g. the B1500).
     current_range_a: float | None = None
+    # AC amplitude (V RMS) used for LIT illumination steps only; ``None`` = use
+    # ``ac_amplitude_v`` for lit steps too. Lets a campaign keep the high drive
+    # the dark high-Z tail needs (ac_amplitude_v) while dropping to a linear
+    # level under bright light (steeper IV, but the photocurrent already gives a
+    # clean low-f reading). Dark steps always use ac_amplitude_v.
+    light_ac_amplitude_v: float | None = None
+
+    def amplitude_for(self, is_dark: bool) -> float:
+        """V RMS to drive for a dark vs lit step."""
+        if is_dark or self.light_ac_amplitude_v is None:
+            return self.ac_amplitude_v
+        return self.light_ac_amplitude_v
 
 
 @dataclass

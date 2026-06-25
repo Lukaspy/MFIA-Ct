@@ -9,7 +9,7 @@ covering the block's worst-case |bias| + AC peak, with auto-output off.
 import math
 from pathlib import Path
 
-from mfia_ct.cf_plan import load_plan
+from mfia_ct.cf_plan import load_plan, parse_plan
 from mfia_ct.hardware import MFIA
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
@@ -66,3 +66,39 @@ def test_cv_output_range_covers_swept_bias_span() -> None:
     s = _configure(cv)
     span = max(abs(cv.cv_bias.start_v), abs(cv.cv_bias.stop_v))
     assert s[f"/{DEV}/sigouts/0/range"] >= span
+
+
+def _one_block(extra_defaults: dict) -> object:
+    plan = {
+        "device": {"id": "X"},
+        "output_dir": "/tmp/x",
+        "defaults": {"amplitude_mv_rms": 100, **extra_defaults},
+        "blocks": [
+            {
+                "name": "b",
+                "type": "c-f",
+                "bias": [0],
+                "illumination": {
+                    "mode": "fixed",
+                    "steps": ["dark", {"wl": 625, "intensity": 100}],
+                },
+            }
+        ],
+    }
+    return parse_plan(plan)[0]
+
+
+def test_light_amplitude_lowers_lit_steps_only() -> None:
+    """light_amplitude_mv_rms drops lit-step drive; dark stays at amplitude."""
+    ia = _one_block({"light_amplitude_mv_rms": 40}).ia
+    assert ia.ac_amplitude_v == 0.1
+    assert ia.light_ac_amplitude_v == 0.04
+    assert ia.amplitude_for(is_dark=True) == 0.1     # dark keeps the high drive
+    assert ia.amplitude_for(is_dark=False) == 0.04   # lit drops
+
+
+def test_no_light_amplitude_uses_one_amplitude() -> None:
+    """Without the override, lit and dark drive the same amplitude."""
+    ia = _one_block({}).ia
+    assert ia.light_ac_amplitude_v is None
+    assert ia.amplitude_for(is_dark=False) == ia.ac_amplitude_v

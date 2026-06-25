@@ -164,7 +164,11 @@ class MFIA:
         else:
             biases = cfg.bias.values_v or [ia.dc_bias_v]
             max_bias = max(abs(float(b)) for b in biases)
-        output_range = (max_bias + amp_pk) * 1.05
+        # Worst-case AC peak across dark/lit steps (lit may use a lower amplitude).
+        amp_max = ia.ac_amplitude_v
+        if ia.light_ac_amplitude_v is not None:
+            amp_max = max(amp_max, ia.light_ac_amplitude_v)
+        output_range = (max_bias + amp_max * math.sqrt(2.0)) * 1.05
 
         settings = [
             (f"/{dev}/imps/{ia.imp_index}/enable", 1),
@@ -203,6 +207,20 @@ class MFIA:
                 (f"/{self.device}/imps/0/bias/value", bias_v),
                 (f"/{self.device}/imps/0/bias/enable", 1),
             ]
+        )
+        self.daq.sync()
+
+    def set_amplitude(self, v_rms: float) -> None:
+        """Update the AC test amplitude mid-campaign (V RMS → peak node).
+
+        Used to drop the drive for lit steps while keeping the dark high-Z
+        amplitude. The output range was sized for the worst-case amplitude in
+        configure_impedance_for_cf, so lowering the amplitude here can't overload.
+        """
+        if self.daq is None:
+            raise RuntimeError("MFIA.connect() must be called first")
+        self.daq.set(
+            [(f"/{self.device}/imps/0/output/amplitude", v_rms * math.sqrt(2.0))]
         )
         self.daq.sync()
 

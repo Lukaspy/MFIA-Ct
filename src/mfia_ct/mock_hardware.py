@@ -171,6 +171,9 @@ class MockMFIA:
     def set_dc_bias(self, bias_v: float) -> None:
         self._bias_v = bias_v
 
+    def set_amplitude(self, v_rms: float) -> None:
+        self._amplitude_vrms = v_rms
+
     def run_sweep(
         self,
         cfg: SweeperSettings,
