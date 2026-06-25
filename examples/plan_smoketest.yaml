@@ -1,0 +1,49 @@
+# SMOKE TEST — verify the campaign's new code paths on hardware before
+# committing the overnight run. This is NOT data; it's a ~2-3 minute mechanics
+# check (high-f only, so every sweep is fast). Run it after compensation and
+# before plan_2013-3_n-Si.yaml. It confirms three things:
+#
+#   1. Per-step light amplitude: dark sweeps record `# amplitude_vrms: 0.1`,
+#      lit sweeps record `# amplitude_vrms: 0.04` (check a couple CSV headers).
+#   2. ±7 V and -2 V run with the OVO light DARK (output range auto-sized to the
+#      bias — the bug that bit us is gone).
+#   3. High-f reads a clean capacitor (|Z| falling with f) at every bias —
+#      contact + measurement chain still good, into saturation.
+#
+# Needs the LED connected (the lit steps exercise that path too). If all three
+# pass, the overnight campaign is safe to launch.
+
+device:
+  id: "2013-3"
+  substrate: "n-Si"
+  notes: "SMOKE TEST — amplitude switching + ±7 V OVO check, not data"
+
+output_dir: "/home/lukas/Documents/capacitance_measurements/smoketest"
+
+defaults:
+  amplitude_mv_rms: 100          # dark drive (high-Z)
+  light_amplitude_mv_rms: 40     # lit drive — verify it switches per step
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 5
+  dark_settle_s: 5
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 1
+  current_range_a: auto
+  freq:
+    start_hz: 1000               # high-f only: fast, and OVO shows at any freq
+    stop_hz: 500000
+    points_per_decade: 6
+
+blocks:
+  # 3 biases (incl. -2 V and +7 V, the output-range/OVO stressers) × dark + 2 lit.
+  - name: "smoke: dark + 625nm @ 0, -2, +7 V"
+    type: c-f
+    bias: [0, -2, 7]
+    illumination:
+      mode: fixed
+      steps:
+        - dark                       # header amplitude_vrms -> 0.1
+        - {wl: 625, intensity: 10}   # header amplitude_vrms -> 0.04
+        - {wl: 625, intensity: 100}  # header amplitude_vrms -> 0.04
