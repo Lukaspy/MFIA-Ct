@@ -1,147 +1,107 @@
-# MFIA-cf measurement plan — 2013-3 (n-Si), Block A–E protocol.
+# === LOCKED-IN MFIA procedure (template — copy per device) ===
+# Reflects everything we learned debugging 2013-3 (n-Si) against the B1500.
 #
-# Load in mfia-cf with "Load plan…" (stages every block into the overnight
-# queue, in order), then press Run queue. Field reference:
-# docs/measurement-plan-format.md.
+# DIVISION OF LABOR (the key decision, baked in):
+#   MFIA does what it's good at:
+#     - sub-kHz extension at a LOW-LEAKAGE bias (0 V) + the wavelength × intensity
+#       illumination matrix  <- the data the B1500 cannot give
+#     - high-f (>=1 kHz) C-f / C-V at ALL biases  <- overlaps + cross-checks B1500
+#   B1500 does the biased low-f (reverse-anchor slow arc): the MFIA physically
+#   can't — at reverse bias the DC leakage current (~50 nA) swamps the AC signal
+#   (~1.5 nA) in its single shared current input, no AC-coupling/decoupling node
+#   exists, and sub-kHz there reads ~100x wrong. The device is fine (B1500:
+#   ~1.3 nF / 16 MΩ at -2 V); it's an MFIA architecture limit.
 #
-# NOTE: Block A's *compensation* is a manual LabOne step (open/short/load) the
-# tool can't drive — do it before loading the plan. Compensate over your full
-# sweep range; "standard" precision is fine (the fixture is clean, ~1.77 fF open).
+# WHY 0 V for the low-f grid: 0 V leaks only ~2 nA, so a sensitive current range
+# fits and the MFIA can actually reach 1 Hz there.
+#   CAVEAT: if your trap physics needs the reverse bias, the sub-kHz-at-reverse
+#   data isn't cleanly reachable by either instrument. A MODEST reverse bias
+#   (-0.5 / -1 V, lower leakage) is the compromise to try — change Block B's bias
+#   and re-validate the pinned range against the B1500.
 #
-# B1500 GROUND TRUTH (dark): ~1.3 nF / 16 MΩ at -2 V, 1 kHz. A clean MFIA sweep
-# should converge to that in the 1 kHz overlap before you trust anything lower.
-#
-# CURRENT RANGE: auto-range misbehaves on this high-Z / low-current device at
-# low f (a few nA), worst at the most-insulating bias. A full C-f spans ~14 MΩ
-# → 1 kΩ (4 decades) so no single fixed range fits — leave those on auto. Pin a
-# sensitive range only on fixed-frequency C-V and narrow low-f-only blocks, and
-# VALIDATE the pinned value against the B1500 number above before trusting it.
-#
-# n-Si POLARITY: the photo-active (reverse-biased) junction is held NEGATIVE, so
-# the anchor is reverse-active at -2 V (mirror of +2 V on p-Si). Heads-up: -2 V
-# is also the *hardest* bias for the MFIA here (most insulating → lowest current
-# at low f), so that's exactly where to lean on the range knob + validation.
+# PER DEVICE: change device.id / substrate / output_dir (and the 0 V anchor if a
+# device's low-leakage bias differs). Compensate open/short (standard precision)
+# over the sweep range first.
 
 device:
   id: "2013-3"
   substrate: "n-Si"
-  notes: "OGT MSM, batch 3 — Block A–E protocol (n-Si; reverse-active anchor = -2 V)"
+  notes: "Locked-in MFIA procedure (MFIA = low-leakage low-f + matrix + high-f; B1500 = biased low-f)"
 
-output_dir: "/data/mfia/2013-3"   # all CSVs land here (Cf/CV prefixes don't collide)
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3"
 
-# Shared instrument + timing defaults. Any block can override these inline.
-# Tuned setup (from debugging this device vs the B1500):
 defaults:
-  amplitude_mv_rms: 100          # ~3x current vs 30 mV; <=2% nonlinear even lit (per the IV)
-  terminal_mode: 2-terminal      # ±10 V bias range (needed for the ±4 V ladder; 4-terminal caps at ±3 V)
+  amplitude_mv_rms: 30          # 100 mV was WORSE on this nonlinear DUT
+  terminal_mode: 2-terminal     # ±10 V bias range
   equiv_circuit: Cp||Rp
-  device_settle_s: 10            # short DC settle after a light/bias step (OGT is fast)
-  dark_settle_s: 10              # dark-bracket dwell (drift/recovery check)
-  settling_tcs: 15               # bumped from 7 — clears the low-f settling artifacts
+  device_settle_s: 10           # short DC settle (OGT is fast)
+  dark_settle_s: 10
+  settling_tcs: 15              # clears the low-f settling artifacts
   auto_bandwidth: true
-  current_range_a: auto          # auto for wide C-f sweeps; pinned only where one range fits (below)
-  freq:                          # default C-f sweep window (1 Hz floor)
+  oversampling: 1               # Block B overrides this; high-f blocks don't need it
+  current_range_a: auto         # Block B pins a sensitive range; wide blocks stay auto
+  freq:
     start_hz: 1
     stop_hz: 300000
     points_per_decade: 10
 
 blocks:
-  # ---- Block A: setup & baseline (after manual compensation) ----
-  # QA sweep at +1 V so it overlaps existing B1500 dark C-f (which was taken at
-  # +1..+4 V) — that's the band where the MFIA-vs-B1500 cross-check is valid.
-  - name: "A: QA dark sweep (B1500 overlap)"
+  # ---- A: QA dark + baseline at the low-leakage anchor ----
+  - name: "A: QA dark @ 0V"
     type: c-f
-    bias: [1]
+    bias: [0]
     illumination: {dark_only: true}
 
-  - name: "A: dark baseline @ anchor"
+  # ---- B: MFIA's unique contribution — sub-kHz illumination matrix @ 0 V ----
+  # Low leakage at 0 V lets a sensitive range + oversampling reach 1 Hz.
+  # NOTE: oversampling makes the low-f points slow; with the full 8λ × 5 matrix
+  # this is an overnight block. Trim intensities or wavelengths if too long.
+  - name: "B: spectral grid @ 0V (sub-kHz)"
     type: c-f
-    bias: [-2]                   # reverse-active anchor for n-Si
-    illumination: {dark_only: true}
-
-  # ---- Range-knob validation: narrow low-f C-f, PINNED range ----
-  # Quick check before the long blocks. 1 Hz–1 kHz so one sensitive range fits.
-  # Compare the result to the B1500 (-2 V should trend toward ~16 MΩ / ~1.3 nF
-  # in the kHz end). If 100 nA still reads junk at the very bottom, step the
-  # range (47 nA-ish lives between 10 nA and 100 nA on the MFIA) or nudge it up.
-  - name: "A: range check @ anchor (1 Hz–1 kHz, 100 nA)"
-    type: c-f
-    bias: [-2]
-    current_range_a: 1.0e-7      # 100 nA — VALIDATE vs B1500, then adopt/tune
-    freq:
-      start_hz: 1
-      stop_hz: 1000
-      points_per_decade: 12
-    illumination: {dark_only: true}
-
-  # ---- Block B: C-f spectral grid @ anchor bias, 1 Hz floor ----
-  # For each wavelength (randomized order): dark-pre, ramp intensity, dark-post.
-  - name: "B: spectral grid @ anchor"
-    type: c-f
-    bias: [-2]                   # reverse-active anchor for n-Si
+    bias: [0]
+    current_range_a: 1.0e-8      # 10 nA — validate vs B1500 before trusting
+    oversampling: 20             # SNR at low f (slow!); push higher only if it helps
     illumination:
       mode: matrix
       wavelengths: [385, 470, 505, 530, 590, 625, 740, 850]
-      order: randomized          # seeded → reproducible; realized order is fixed at load
+      order: randomized
       seed: 1
-      intensities: [1, 3, 10, 30, 100]   # monotonic increasing
-      dark_bracket: per-wavelength        # dark pre + post around each wavelength's ramp
+      intensities: [1, 3, 10, 30, 100]
+      dark_bracket: per-wavelength
 
-  # ---- Block C: C-f bias ladder @ one bright reference, 1 Hz floor ----
-  # 1/C² vs V (Mott-Schottky), light-effect collapse, forward-bias MSM null.
-  # Spans both polarities, so it covers the forward (null) and reverse (active)
-  # sides regardless of substrate — no change needed for n-Si.
-  - name: "C: bias ladder @ 625nm"
+  # ---- C: bias ladder @ 625 nm, HIGH-F ONLY (Mott-Schottky + B1500 overlap) ----
+  # 1/C² vs V and the light-effect collapse live in the depletion C, which is
+  # well-defined >= 1 kHz; the reverse-bias low-f is the B1500's job.
+  - name: "C: bias ladder @ 625nm (high-f)"
     type: c-f
-    bias: [-4, -2, 0, 1, 2, 4]
-    illumination:
-      mode: fixed                 # this exact illumination runs at every bias
-      steps:
-        - dark
-        - {wl: 625, intensity: 100}
-
-  # ---- Block D: C-f deep anchors @ 10 mHz ----
-  # The strongest conditions + dark; long sweeps that close the slow arc. Bump
-  # the device settle for the slow-trap tail. Two lit anchors: 625 nm (film/edge,
-  # ties to the hot-chuck Arrhenius data) and 740 nm (substrate-only probe — below
-  # the Ge2Se3 gap, the most diagnostic point for the substrate-junction story).
-  # Three deep sweeps (~45 min each) + dark.
-  - name: "D: deep anchor @ 10 mHz"
-    type: c-f
-    bias: [-2]                   # reverse-active anchor for n-Si
-    device_settle_s: 25           # override: let the ~tens-of-seconds trap settle
-    freq:
-      start_hz: 0.01              # 10 mHz floor
-      stop_hz: 300000
-      points_per_decade: 8
+    bias: [-4, -2, -1, 0, 1, 2, 4]
+    freq: {start_hz: 1000, stop_hz: 300000, points_per_decade: 10}
     illumination:
       mode: fixed
       steps:
         - dark
         - {wl: 625, intensity: 100}
-        - {wl: 740, intensity: 100}   # substrate-only deep anchor
 
-  # ---- Block E: C-V dispersion across 1/10/100/1000 Hz ----
-  # Anchors (470/505, 625, 740) get the full intensity set; the rest get
-  # dark + 100% only. Frequencies high→low so the reliable data lands first.
-  # (C-V sweeps bias internally, so it carries the fine voltage/trap dispersion.)
-  # Left on auto-range: one block spans 1 Hz–1 kHz, so no single fixed range
-  # fits all four frequencies. If the 1 Hz C-V comes back corrupted, split it
-  # into its own block with a pinned `current_range_a` (the optimal range at
-  # 1 Hz is more sensitive than at 1 kHz).
-  - name: "E: C-V dispersion"
+  # ---- E: C-V dispersion at the trustworthy / B1500-overlap frequencies ----
+  # 1 kHz and 100 Hz are clean and overlap the B1500. 1/10 Hz dropped: the
+  # reverse-bias half of those is corrupted (DC-leakage limit) and they're slow.
+  - name: "E: C-V dispersion (1 kHz / 100 Hz)"
     type: c-v
-    frequencies: [1000, 100, 10, 1]
+    frequencies: [1000, 100]
     bias: {start_v: -4, stop_v: 4, points: 101}
     illumination:
       mode: matrix
       dark_bracket: per-wavelength
       wavelengths:
-        - {nm: 470, intensities: [1, 3, 10, 30, 100]}   # anchor: full set
-        - {nm: 505, intensities: [1, 3, 10, 30, 100]}   # anchor
-        - {nm: 625, intensities: [1, 3, 10, 30, 100]}   # anchor
-        - {nm: 740, intensities: [1, 3, 10, 30, 100]}   # anchor
-        - {nm: 385, intensities: [100]}                 # others: 100% only
+        - {nm: 470, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 505, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 625, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 740, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 385, intensities: [100]}
         - {nm: 530, intensities: [100]}
         - {nm: 590, intensities: [100]}
         - {nm: 850, intensities: [100]}
+
+  # DROPPED vs the old A–E plan: Block D (10 mHz deep anchors @ -2 V) — the
+  # MFIA can't reach it (reverse-bias DC-leakage limit). That slow-arc data is
+  # B1500 territory, or simply not accessible sub-1-kHz at reverse bias.
