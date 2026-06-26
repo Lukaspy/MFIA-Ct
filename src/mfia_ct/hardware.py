@@ -124,7 +124,12 @@ class MFIA:
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 0),
             (f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 0),
             (f"/{dev}/imps/{ia.imp_index}/freq", ia.frequency_hz),
-            (f"/{dev}/imps/{ia.imp_index}/output/amplitude", ia.ac_amplitude_v),
+            # /imps/N/output/amplitude is V PEAK (same output-stage quantity as
+            # /sigouts/N/amplitudes/M, documented "peak amplitude"; output/range
+            # is peak-referenced). ac_amplitude_v is V RMS (B1500 convention), so
+            # convert RMS->peak here exactly as configure_impedance_for_cf and
+            # set_amplitude do. Writing it raw under-drove the test signal by √2.
+            (f"/{dev}/imps/{ia.imp_index}/output/amplitude", ia.ac_amplitude_v * math.sqrt(2.0)),
             (f"/{dev}/imps/{ia.imp_index}/bias/value", ia.dc_bias_v),
             (f"/{dev}/imps/{ia.imp_index}/bias/enable", 1 if ia.dc_bias_v != 0 else 0),
             (f"/{dev}/imps/{ia.imp_index}/model", model),
@@ -261,11 +266,7 @@ class MFIA:
         sweeper.set("xmapping", 1 if cfg.log_spacing else 0)
         # Auto-BW: 0=manual, 1=fixed, 2=auto (recommended for IS).
         sweeper.set("bandwidthcontrol", 2 if cfg.auto_bandwidth else 0)
-        sweeper.set("settling/tc", float(cfg.settling_tcs))
-        sweeper.set("settling/inaccuracy", float(cfg.settling_inaccuracy))
-        sweeper.set("averaging/sample", int(cfg.averaging_samples))
-        sweeper.set("averaging/time", float(cfg.averaging_time_s))
-        sweeper.set("order", int(cfg.filter_order))
+        self._apply_sweeper_settling(sweeper, cfg)
 
         return self._execute_sweeper(
             sweeper, progress_cb=progress_cb, stop_check=stop_check
@@ -311,15 +312,35 @@ class MFIA:
         sweeper.set("samplecount", max(2, int(cv.n_points)))
         sweeper.set("xmapping", 1 if cv.log_spacing else 0)
         sweeper.set("bandwidthcontrol", 2 if cv.auto_bandwidth else 0)
-        sweeper.set("settling/tc", float(cv.settling_tcs))
-        sweeper.set("settling/inaccuracy", float(cv.settling_inaccuracy))
-        sweeper.set("averaging/sample", int(cv.averaging_samples))
-        sweeper.set("averaging/time", float(cv.averaging_time_s))
-        sweeper.set("order", int(cv.filter_order))
+        self._apply_sweeper_settling(sweeper, cv)
 
         return self._execute_sweeper(
             sweeper, progress_cb=progress_cb, stop_check=stop_check
         )
+
+    def _apply_sweeper_settling(self, sweeper: Any, cfg: Any) -> None:
+        """Settling + averaging + sinc filter, set consistently for both sweep types.
+
+        settling/tc and settling/inaccuracy are COUPLED: per ZI's Sweeper docs the
+        LAST one written wins, and effective settling = max(settling/tc, settling/time).
+        Writing settling/tc THEN settling/inaccuracy (the old code) silently DISCARDED
+        the configured settling_tcs. Here settling/tc is written LAST so settling_tcs
+        is authoritative, with settling/time pinned to 0 so it is the sole criterion.
+
+        averaging/tc gives real averaging — with averaging_samples=1 and averaging/tc=0
+        the sweeper averaged nothing at any frequency. The sinc filter rejects the
+        low-frequency harmonic/feedthrough content (ZI's low-f recommendation). None of
+        this removes a compensation-extrapolation artifact below the comp range — it
+        only stabilizes the raw measurement.
+        """
+        sweeper.set("settling/time", 0.0)
+        sweeper.set("settling/inaccuracy", float(cfg.settling_inaccuracy))
+        sweeper.set("settling/tc", float(cfg.settling_tcs))  # LAST -> authoritative
+        sweeper.set("averaging/tc", float(getattr(cfg, "averaging_tc", 0.0)))
+        sweeper.set("averaging/sample", int(cfg.averaging_samples))
+        sweeper.set("averaging/time", float(cfg.averaging_time_s))
+        sweeper.set("sincfilter", 1 if getattr(cfg, "sinc_filter", True) else 0)
+        sweeper.set("order", int(cfg.filter_order))
 
     def _execute_sweeper(
         self,

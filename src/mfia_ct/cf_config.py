@@ -71,8 +71,14 @@ class SweeperSettings:
     settling_inaccuracy: float = 0.01
     averaging_samples: int = 1
     averaging_time_s: float = 0.0
+    # Average over this many demod time constants per point. With this at 0 AND
+    # averaging_samples=1 the sweeper did NO averaging at any frequency.
+    averaging_tc: float = 0.0
     auto_bandwidth: bool = True
     filter_order: int = 4
+    # Sinc filter — rejects harmonic / feedthrough content, auto-relevant below
+    # ~50 Hz; ZI's recommendation for low-frequency impedance sweeps.
+    sinc_filter: bool = True
 
     @property
     def n_points(self) -> int:
@@ -112,8 +118,10 @@ class BiasSweepSettings:
     settling_inaccuracy: float = 0.01
     averaging_samples: int = 1
     averaging_time_s: float = 0.0
+    averaging_tc: float = 0.0
     auto_bandwidth: bool = True
     filter_order: int = 4
+    sinc_filter: bool = True
 
     @property
     def values_v(self) -> list[float]:
