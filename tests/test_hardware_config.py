@@ -58,6 +58,24 @@ def test_configure_enables_the_signal_output() -> None:
     assert s[f"/{DEV}/imps/0/output/on"] == 1
 
 
+def test_configure_owns_compensation_state() -> None:
+    """The tool must WRITE calib/user/enable (not inherit webUI state)."""
+    on = parse_plan({
+        "device": {"id": "X"}, "output_dir": "/tmp/x",
+        "blocks": [{"name": "b", "type": "c-f", "bias": [0],
+                    "compensation_enabled": True,
+                    "illumination": {"dark_only": True}}],
+    })[0]
+    off = parse_plan({
+        "device": {"id": "X"}, "output_dir": "/tmp/x",
+        "blocks": [{"name": "b", "type": "c-f", "bias": [0],
+                    "compensation_enabled": False,
+                    "illumination": {"dark_only": True}}],
+    })[0]
+    assert _configure(on)[f"/{DEV}/imps/0/calib/user/enable"] == 1
+    assert _configure(off)[f"/{DEV}/imps/0/calib/user/enable"] == 0
+
+
 def test_cf_output_range_uses_block_worst_case_bias() -> None:
     """A bias-ladder block sizes to the largest |bias| it will visit (±4 V)."""
     cfgs = load_plan(EXAMPLES / "plan_2013-3_n-Si.yaml")

@@ -71,6 +71,9 @@ class _Defaults:
     dark_settle_s: float = 10.0
     settling_tcs: float = 7.0
     auto_bandwidth: bool = True
+    # Apply loaded user open/short comp. False on a (low-f) block reads RAW —
+    # LabOne extrapolates comp below its range and corrupts high-Z low-f data.
+    compensation_enabled: bool = True
     # Demod samples averaged per point ("oversampling"). 1 = none. ZI's high-Z
     # recipe uses ~800-2000 to pull a few-pA signal out of the noise at low f.
     oversampling: int = 1
@@ -133,6 +136,9 @@ def _merge_defaults(base: _Defaults, raw: dict[str, Any]) -> _Defaults:
         dark_settle_s=float(raw.get("dark_settle_s", out.dark_settle_s)),
         settling_tcs=float(raw.get("settling_tcs", out.settling_tcs)),
         auto_bandwidth=bool(raw.get("auto_bandwidth", out.auto_bandwidth)),
+        compensation_enabled=bool(
+            raw.get("compensation_enabled", out.compensation_enabled)
+        ),
         oversampling=max(1, int(raw.get("oversampling", out.oversampling))),
         current_range_a=_parse_current_range(
             raw.get("current_range_a", out.current_range_a), out.current_range_a
@@ -151,7 +157,8 @@ def _block_defaults(base: _Defaults, block: dict[str, Any]) -> _Defaults:
     keys = {
         "amplitude_mv_rms", "light_amplitude_mv_rms", "terminal_mode",
         "equiv_circuit", "device_settle_s", "dark_settle_s", "settling_tcs",
-        "auto_bandwidth", "oversampling", "current_range_a", "freq",
+        "auto_bandwidth", "compensation_enabled", "oversampling",
+        "current_range_a", "freq",
     }
     inline = {k: block[k] for k in keys if k in block}
     return _merge_defaults(base, inline) if inline else base
@@ -304,6 +311,7 @@ def _build_ia(d: _Defaults, init_freq_hz: float) -> IASettings:
         terminal_mode=d.terminal_mode,
         imp_index=0,
         current_range_a=d.current_range_a,
+        compensation_enabled=d.compensation_enabled,
     )
 
 

@@ -133,6 +133,8 @@ class MFIA:
             (f"/{dev}/imps/{ia.imp_index}/bias/value", ia.dc_bias_v),
             (f"/{dev}/imps/{ia.imp_index}/bias/enable", 1 if ia.dc_bias_v != 0 else 0),
             (f"/{dev}/imps/{ia.imp_index}/model", model),
+            (f"/{dev}/imps/{ia.imp_index}/calib/user/enable",
+             1 if ia.compensation_enabled else 0),  # own comp state explicitly
             (f"/{dev}/demods/{ia.imp_index}/rate", cfg.demod.sample_rate_hz),
             (f"/{dev}/demods/{ia.imp_index}/order", cfg.demod.filter_order),
             (f"/{dev}/demods/{ia.imp_index}/timeconstant", cfg.demod.time_constant_s),
@@ -194,6 +196,11 @@ class MFIA:
             (f"/{dev}/imps/{ia.imp_index}/bias/value", ia.dc_bias_v),
             (f"/{dev}/imps/{ia.imp_index}/bias/enable", 1),
             (f"/{dev}/imps/{ia.imp_index}/model", model),
+            # Own the compensation state explicitly — don't inherit whatever the
+            # webUI last persisted. Below the comp floor, set compensation_enabled
+            # False to read RAW (LabOne extrapolates user comp out of band).
+            (f"/{dev}/imps/{ia.imp_index}/calib/user/enable",
+             1 if ia.compensation_enabled else 0),
         ]
         # Current-input range: AUTO by default — the webUI runs auto and reads
         # the high-Z low-f tail cleanly once wired right, so auto is the norm.

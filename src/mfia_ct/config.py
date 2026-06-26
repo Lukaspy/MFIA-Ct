@@ -80,6 +80,13 @@ class IASettings:
     # level under bright light (steeper IV, but the photocurrent already gives a
     # clean low-f reading). Dark steps always use ac_amplitude_v.
     light_ac_amplitude_v: float | None = None
+    # Apply the loaded LabOne user open/short compensation. The tool used to
+    # inherit whatever the webUI last persisted (undiagnosable after the fact);
+    # set it explicitly so runs are deterministic. Set False for a sub-comp-floor
+    # (low-f) leg to read RAW data: LabOne EXTRAPOLATES user comp below its
+    # frequency range, which corrupts a high-Z DUT at low f (inductive phase /
+    # negative C). Below the comp floor, raw is more trustworthy than extrapolated.
+    compensation_enabled: bool = True
 
     def amplitude_for(self, is_dark: bool) -> float:
         """V RMS to drive for a dark vs lit step."""
