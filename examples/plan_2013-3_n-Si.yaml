@@ -41,12 +41,16 @@ defaults:
   settling_tcs: 15
   auto_bandwidth: true
   oversampling: 1               # off; fallback for low-f SNR if needed
-  current_range_a: auto         # auto everywhere, like the webUI
+  current_range_a: auto         # auto for the WIDE blocks (it ranges fine at
+                                # >=~80 Hz). The low-f block PINS it: hardware test
+                                # 2026-06-25 showed auto-range sits on a too-coarse
+                                # range (1 mA!) below ~30 Hz, where the nA signal
+                                # vanishes -> THAT was the low-f garbage. NOT
+                                # compensation (comp ON vs OFF tested identical).
   freq:
-    start_hz: 80                  # comp floor: comp covers 80 Hz-510 kHz; below
-                                  # 80 Hz is UNCOMPENSATED -> garbage (inductive,
-                                  # neg-G). Don't sweep there. This still extends
-                                  # ~1 decade below the B1500's 1 kHz floor.
+    start_hz: 80                  # auto-range floor: below ~30 Hz auto mis-ranges
+                                  # on this high-Z DUT. The sub-80 Hz tail is done
+                                  # in the PINNED block (B-low), clean to 1 Hz at 0 V.
     stop_hz: 500000
     points_per_decade: 10
 
@@ -69,6 +73,29 @@ blocks:
       seed: 1
       intensities: [1, 3, 10, 30, 100]
       dark_bracket: per-wavelength
+
+  # ---- B-low: sub-kHz tail @ 0 V, PINNED 10 nA (the real low-f fix) ----
+  # Validated on the live MFIA (2026-06-25): at 0 V with the current range pinned
+  # to 10 nA, it reads a clean ~10 MΩ, POSITIVE-G, down to 1 Hz — with comp ON.
+  # Auto-range (sitting on 1 mA) was the entire low-f problem; compensation was a
+  # red herring (comp on/off measured identical). -2 V can't reach this: its
+  # ~54 nA DC leakage forces a coarser 100 nA range, too coarse for the high-Z AC,
+  # so the reverse-anchor sub-80-Hz tail stays leakage-limited (its high-f is fine).
+  # Dark + DIM only: bright light's photocurrent overloads the 10 nA range at 0 V.
+  - name: "B-low: sub-kHz tail @ 0 V (1-30 Hz, 10 nA)"
+    type: c-f
+    bias: [0]
+    current_range_a: 1.0e-8
+    oversampling: 10
+    settling_tcs: 20
+    freq: {start_hz: 1, stop_hz: 30, points_per_decade: 10}
+    illumination:
+      mode: matrix
+      dark_bracket: per-wavelength
+      wavelengths:
+        - {nm: 470, intensities: [1, 3, 10]}
+        - {nm: 625, intensities: [1, 3, 10]}
+        - {nm: 740, intensities: [1, 3, 10]}
 
   # ---- C: bias ladder @ 625 nm (dark vs bright) ----
   # Mott-Schottky 1/C² vs V and the light-effect collapse, full band per bias.
