@@ -41,8 +41,13 @@ def contact_ok(mfia) -> bool:
     """Quick high-f dark sweep at 0 V; True if it reads capacitive (landed)."""
     daq, dev = mfia.daq, mfia.device
     P = f"/{dev}/imps/0"
+    try:
+        od = int(daq.getInt(f"{P}/output/demod"))
+    except Exception:
+        od = 1
     daq.set([(f"{P}/enable", 1), (f"{P}/mode", 1), (f"{P}/auto/output", 0),
              (f"/{dev}/sigouts/0/range", 1.0), (f"{P}/output/on", 1),
+             (f"/{dev}/sigouts/0/enables/{od}", 1),  # route amplitude to output
              (f"{P}/auto/bw", 1), (f"{P}/output/amplitude", 0.1 * 2 ** 0.5),
              (f"{P}/bias/value", 0.0), (f"{P}/bias/enable", 0),
              (f"{P}/model", 1), (f"{P}/auto/inputrange", 1)])
