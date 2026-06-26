@@ -116,11 +116,18 @@ class MFIA:
         # auto/output and auto/bw left OFF: both recalibrate periodically in
         # the background and cause demod-stream gaps. The user's amplitude and
         # demod time-constant settings are used as-is.
+        try:
+            out_demod = int(self.daq.getInt(f"/{dev}/imps/{ia.imp_index}/output/demod"))
+        except Exception:
+            out_demod = 1
         settings = [
             (f"/{dev}/imps/{ia.imp_index}/enable", 1),
             (f"/{dev}/imps/{ia.imp_index}/mode", _TERMINAL_MODE_NODE_VALUE[ia.terminal_mode]),
             (f"/{dev}/imps/{ia.imp_index}/auto/output", 0),
             (f"/{dev}/imps/{ia.imp_index}/output/on", 1),  # IA test-signal ON
+            # Route the output demod's amplitude to the physical output (cleared
+            # by disable_everything; output/on alone does not restore it -> open).
+            (f"/{dev}/sigouts/{ia.imp_index}/enables/{out_demod}", 1),
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 0),
             (f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 0),
             (f"/{dev}/imps/{ia.imp_index}/freq", ia.frequency_hz),
@@ -178,6 +185,15 @@ class MFIA:
             amp_max = max(amp_max, ia.light_ac_amplitude_v)
         output_range = (max_bias + amp_max * math.sqrt(2.0)) * 1.05
 
+        # The IA drives the output through this demod. disable_everything zeros
+        # /sigouts/N/enables/* (the per-demod amplitude routing), and output/on
+        # alone does NOT restore it — so the output stage is on and the amplitude
+        # is set, but nothing is routed to it -> the sweep reads OPEN. Route it.
+        try:
+            out_demod = int(self.daq.getInt(f"/{dev}/imps/{ia.imp_index}/output/demod"))
+        except Exception:
+            out_demod = 1
+
         settings = [
             (f"/{dev}/imps/{ia.imp_index}/enable", 1),
             (f"/{dev}/imps/{ia.imp_index}/mode", _TERMINAL_MODE_NODE_VALUE[ia.terminal_mode]),
@@ -191,6 +207,9 @@ class MFIA:
             # nothing whenever the output was off and every sweep read GΩ "open"
             # until a power-cycle + webUI sweep re-enabled it.
             (f"/{dev}/imps/{ia.imp_index}/output/on", 1),
+            # Route the output demod's amplitude to the physical output (cleared
+            # by disable_everything; output/on does not restore it).
+            (f"/{dev}/sigouts/{ia.imp_index}/enables/{out_demod}", 1),
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 1),  # sweeper expects auto-BW on
             (f"/{dev}/imps/{ia.imp_index}/output/amplitude", amp_pk),
             (f"/{dev}/imps/{ia.imp_index}/bias/value", ia.dc_bias_v),

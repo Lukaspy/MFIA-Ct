@@ -26,6 +26,9 @@ class _FakeDaq:
         for node, val in items:
             self.settings[node] = val
 
+    def getInt(self, node) -> int:
+        return 1  # e.g. imps/0/output/demod -> 1 (the IA output demod)
+
     def sync(self) -> None:
         pass
 
@@ -56,6 +59,9 @@ def test_configure_enables_the_signal_output() -> None:
     cfgs = load_plan(EXAMPLES / "plan_2013-3_test.yaml")
     s = _configure(cfgs[0])
     assert s[f"/{DEV}/imps/0/output/on"] == 1
+    # ...and the output demod's amplitude must be ROUTED to the output, else the
+    # drive never reaches the DUT (disable_everything clears this routing).
+    assert s[f"/{DEV}/sigouts/0/enables/1"] == 1
 
 
 def test_configure_owns_compensation_state() -> None:
