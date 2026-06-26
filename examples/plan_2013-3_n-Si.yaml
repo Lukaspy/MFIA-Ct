@@ -45,6 +45,16 @@ defaults:
     points_per_decade: 10
 
 blocks:
+  # ---- QA: dark cross-check vs B1500 (instrument + linearity check) ----
+  # +1 V dark over the main band overlaps existing B1500 dark C-f (+1..+4 V). Confirm
+  # MFIA and B1500 agree within a few % across 1-500 kHz BEFORE the long run -- this
+  # also validates linearity since the MFIA drives 100 mV vs the B1500's 30 mV.
+  # (Delete this block if you cross-check manually.)
+  - name: "QA: dark @ +1 V (B1500 overlap)"
+    type: c-f
+    bias: [1]
+    illumination: {dark_only: true}
+
   # ---- spectral grid (lambda x intensity) AT EVERY BIAS, full band ----
   # The complete spectral x bias x frequency photo-response. Per-wavelength dark
   # brackets give the dark reference + reversibility check at each bias (so a separate
