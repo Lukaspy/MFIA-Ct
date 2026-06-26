@@ -1,71 +1,57 @@
-# === MFIA C-f / C-V campaign — 2013-3 (n-Si). Template, copy per device. ===
+# === MFIA C-f / C-V — COMPLETE OGT photo-capacitance protocol. 2013-3 (n-Si). ===
+# Template: copy per device (change device.id / substrate / output_dir).
 #
-# Plain and correct, now that the setup is understood. The earlier "MFIA can't
-# do biased low-f" verdict was wrong — it was the drain miswired to HPOT plus a
-# tool bug (auto-output ignored the DC bias, so bias over-ranged the output ->
-# OVO). Wired right + explicit output range, the MFIA reads a clean capacitor on
-# plain AUTO range across the band, biased or not (validated against the webUI
-# and the B1500). So: no pinned ranges, no oversampling tricks, no high-f-only
-# restrictions, no B1500 hand-off. Just the measurement.
+# The full optically-generated-trap study: the wavelength x intensity photo-response
+# of the junction capacitance across BIAS and FREQUENCY. The spectral matrix runs at
+# EVERY bias (bias is the C-f outer loop) — that's the key fix vs the first pass,
+# which only did the matrix at -2 V.
 #
-# Settings match the validated webUI config: 2-terminal, AUTO current range,
-# 30 mV (kept modest for IV linearity on this junction). The tool now sets the
-# output range to fit the bias automatically (hardware.configure_impedance_for_cf).
+# All MFIA software issues are fixed + hardware-validated (2026-06): output enable +
+# amplitude routing, output-range vs bias (OVO), auto-range pinning for the low-f
+# tail, sweeper settling, explicit compensation state. Reads a clean ~1.3 nF cap and
+# tracks the B1500.
 #
-# PER DEVICE: change device.id / substrate / output_dir. Confirm terminal mode
-# matches the B1500 reference. Compensate open/short (standard) over the range
-# first. If 30 mV is noisy at the high-Z low-f tail, bump amplitude a little or
-# set a block-level `oversampling: 10-50` — but it should be clean.
+# RUN IT (either):
+#   GUI:      Load plan... -> Run queue
+#   Headless: .venv/bin/python scripts/run_plan_headless.py examples/plan_2013-3_n-Si.yaml
+#             (does a contact pre-check and aborts if the probe reads open)
+#
+# RUNTIME ~4 h. The all-bias spectral grid is the long pole (~2.5 h). To shorten,
+# trim the `bias` list or the `intensities` in the spectral block. Compensate
+# open/short (standard) over 80 Hz-510 kHz first.
 
 device:
   id: "2013-3"
   substrate: "n-Si"
-  notes: "Campaign — reverse-active anchor -2 V; auto range; 30 mV"
+  notes: "Complete OGT photo-capacitance: spectral matrix x bias x frequency"
 
 output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3"
 
 defaults:
-  amplitude_mv_rms: 100         # dark high-Z tail needs ~100 mV (30 mV too small —
-                                # ~nA drive can't lock auto-range); linear in dark.
-  light_amplitude_mv_rms: 40    # lit steps drop to a linear level: under light the
-                                # IV is steeper, but the photocurrent already gives
-                                # a clean low-f reading, so 40 mV is enough. Dark
-                                # steps / brackets keep the 100 mV high-Z drive.
-                                # (Per-step, applied automatically by dark-vs-lit.)
-                                # NOTE: -2 V (and ±7 V) low-f may be DC-leakage-
-                                # limited; high-f is clean at all biases. See test5.
-  terminal_mode: 2-terminal
+  amplitude_mv_rms: 100         # dark high-Z drive (linear; 30 mV too small for low-f)
+  light_amplitude_mv_rms: 40    # lit steps drop to a linear level (auto, per dark/lit)
+  terminal_mode: 2-terminal     # ±10 V bias
   equiv_circuit: Cp||Rp
   device_settle_s: 10
   dark_settle_s: 10
   settling_tcs: 15
   auto_bandwidth: true
-  oversampling: 1               # off; fallback for low-f SNR if needed
-  current_range_a: auto         # auto for the WIDE blocks (it ranges fine at
-                                # >=~80 Hz). The low-f block PINS it: hardware test
-                                # 2026-06-25 showed auto-range sits on a too-coarse
-                                # range (1 mA!) below ~30 Hz, where the nA signal
-                                # vanishes -> THAT was the low-f garbage. NOT
-                                # compensation (comp ON vs OFF tested identical).
+  oversampling: 1               # B-low overrides
+  current_range_a: auto         # wide blocks auto; B-low pins 10 nA (auto can't reach
+                                # the fine ranges + ratchets up on a cap's high-f current)
   freq:
-    start_hz: 80                  # auto-range floor: below ~30 Hz auto mis-ranges
-                                  # on this high-Z DUT. The sub-80 Hz tail is done
-                                  # in the PINNED block (B-low), clean to 1 Hz at 0 V.
+    start_hz: 80                 # auto-range floor; sub-80 Hz is the pinned B-low block
     stop_hz: 500000
     points_per_decade: 10
 
 blocks:
-  # ---- A: dark baseline / QA at the anchor and 0 V ----
-  - name: "A: dark baseline (-7, -2, 0, +7 V)"
+  # ---- spectral grid (lambda x intensity) AT EVERY BIAS, full band ----
+  # The complete spectral x bias x frequency photo-response. Per-wavelength dark
+  # brackets give the dark reference + reversibility check at each bias (so a separate
+  # dark-baseline block is redundant). ~9 biases x 56 sweeps -> the long pole.
+  - name: "spectral grid (lambda x intensity, all biases)"
     type: c-f
-    bias: [-7, -2, 0, 7]
-    illumination: {dark_only: true}
-
-  # ---- B: spectral grid — λ × intensity matrix at the reverse-active anchor ----
-  # The photo-response / trap dispersion across the full band, at the trap bias.
-  - name: "B: spectral grid @ -2 V"
-    type: c-f
-    bias: [-2]
+    bias: [-7, -4, -2, -1, 0, 1, 2, 4, 7]
     illumination:
       mode: matrix
       wavelengths: [385, 470, 505, 530, 590, 625, 740, 850]
@@ -74,15 +60,11 @@ blocks:
       intensities: [1, 3, 10, 30, 100]
       dark_bracket: per-wavelength
 
-  # ---- B-low: sub-kHz tail @ 0 V, PINNED 10 nA (the real low-f fix) ----
-  # Validated on the live MFIA (2026-06-25): at 0 V with the current range pinned
-  # to 10 nA, it reads a clean ~10 MΩ, POSITIVE-G, down to 1 Hz — with comp ON.
-  # Auto-range (sitting on 1 mA) was the entire low-f problem; compensation was a
-  # red herring (comp on/off measured identical). -2 V can't reach this: its
-  # ~54 nA DC leakage forces a coarser 100 nA range, too coarse for the high-Z AC,
-  # so the reverse-anchor sub-80-Hz tail stays leakage-limited (its high-f is fine).
-  # Dark + DIM only: bright light's photocurrent overloads the 10 nA range at 0 V.
-  - name: "B-low: sub-kHz tail @ 0 V (1-30 Hz, 10 nA)"
+  # ---- sub-kHz tail @ 0 V, pinned 10 nA (the MFIA's below-1-kHz extension) ----
+  # 0 V + low leakage reads clean to 1 Hz on a pinned sensitive range. Bright light
+  # overloads the 10 nA range, so DIM only (1-3 %). (-2 V and other biased sub-80-Hz
+  # are DC-leakage-limited on the MFIA -> that range is the B1500's job.)
+  - name: "sub-kHz tail @ 0 V (1-30 Hz, 10 nA)"
     type: c-f
     bias: [0]
     current_range_a: 1.0e-8
@@ -93,40 +75,26 @@ blocks:
       mode: matrix
       dark_bracket: per-wavelength
       wavelengths:
-        - {nm: 470, intensities: [1, 3, 10]}
-        - {nm: 625, intensities: [1, 3, 10]}
-        - {nm: 740, intensities: [1, 3, 10]}
+        - {nm: 470, intensities: [1, 3]}
+        - {nm: 625, intensities: [1, 3]}
+        - {nm: 740, intensities: [1, 3]}
 
-  # ---- C: bias ladder @ 625 nm (dark vs bright) ----
-  # Mott-Schottky 1/C² vs V and the light-effect collapse, full band per bias.
-  # Extended to ±7 V (saturation) — we have ±10 V in 2-terminal. The output range
-  # auto-sizes to each bias (tool handles it); high-f stays clean into saturation.
-  - name: "C: bias ladder @ 625 nm (to ±7 V saturation)"
-    type: c-f
-    bias: [-7, -4, -2, -1, 0, 1, 2, 4, 7]
-    illumination:
-      mode: fixed
-      steps:
-        - dark
-        - {wl: 625, intensity: 100}
-
-  # ---- E: C-V dispersion at several test frequencies ----
-  # Voltage/trap dispersion; frequencies high->low so the fast data lands first.
-  # Only frequencies within the 80 Hz-510 kHz comp range — 10/1 Hz dropped
-  # (uncompensated + very slow). 100 Hz is the lowest comped C-V.
-  - name: "E: C-V dispersion (1 kHz / 100 Hz)"
+  # ---- C-V dispersion: fine bias resolution at 2 frequencies ----
+  # 141-point C-V -> Mott-Schottky (1/C^2 vs V) + the fine bias-dependence of the
+  # photo-response (the spectral block's bias axis is coarse; this fills it in).
+  - name: "C-V dispersion (1 kHz / 100 Hz)"
     type: c-v
     frequencies: [1000, 100]
-    bias: {start_v: -7, stop_v: 7, points: 141}    # ±7 V into saturation, ~0.1 V step
+    bias: {start_v: -7, stop_v: 7, points: 141}
     illumination:
       mode: matrix
       dark_bracket: per-wavelength
-      wavelengths:
+      wavelengths:                          # full 8 x 5 ramp (no 100%-only holes)
+        - {nm: 385, intensities: [1, 3, 10, 30, 100]}
         - {nm: 470, intensities: [1, 3, 10, 30, 100]}
         - {nm: 505, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 530, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 590, intensities: [1, 3, 10, 30, 100]}
         - {nm: 625, intensities: [1, 3, 10, 30, 100]}
         - {nm: 740, intensities: [1, 3, 10, 30, 100]}
-        - {nm: 385, intensities: [100]}
-        - {nm: 530, intensities: [100]}
-        - {nm: 590, intensities: [100]}
-        - {nm: 850, intensities: [100]}
+        - {nm: 850, intensities: [1, 3, 10, 30, 100]}
