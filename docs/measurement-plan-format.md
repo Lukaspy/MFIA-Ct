@@ -13,8 +13,11 @@ what was measured.
 - **Run it:** in `mfia-cf`, connect the instrument → **Load plan…** → review the
   staged queue → **Run queue**. (You can also stage configs by hand and mix
   them with a loaded plan.)
-- **Worked example:** [`examples/plan_blocks_A-E.yaml`](../examples/plan_blocks_A-E.yaml)
-  — the Block A–E protocol, fully commented. Start there and edit.
+- **Worked example:** [`examples/plan_2013-3_n-Si.yaml`](../examples/plan_2013-3_n-Si.yaml)
+  — the current canonical protocol (spectral C-f at every bias + full C-V),
+  commented with the hardware rationale. Start there and edit.
+  ([`plan_blocks_A-E.yaml`](../examples/plan_blocks_A-E.yaml) is the older,
+  simpler A–E walkthrough.)
 - **Loader:** `mfia_ct.cf_plan.load_plan(path) -> list[CfConfig]` (pure, testable).
 
 ---
@@ -44,7 +47,9 @@ override any of these inline (see *Blocks*).
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `amplitude_mv_rms` | `30` | AC test amplitude, **mV RMS**. |
+| `amplitude_mv_rms` | `30` | **Dark** AC test amplitude, **mV RMS**. The `30` default is too small for the dark high-Z, low-f tail (noisy) — use **~100** for depletion-cap work. |
+| `light_amplitude_mv_rms` | = `amplitude_mv_rms` | **Lit-step** AC amplitude, **mV RMS**. Under light the junction drops to low impedance, so step the drive **down (~40)** to stay small-signal across the curved C-V. Applied automatically per step (dark vs lit); unset → same as dark. |
+| `compensation_enabled` | `true` | Apply the MFIA's stored Open/Short/Load compensation. Leave `true`; the compensation itself is built **manually in LabOne first** (see *Notes & limits*). |
 | `terminal_mode` | `2-terminal` | `2-terminal` (±10 V bias) or `4-terminal` (±3 V). |
 | `equiv_circuit` | `Cp\|\|Rp` | `Cp\|\|Rp` or `Cs-Rs`. |
 | `device_settle_s` | `10` | **Short DC settle** after a light/bias step (the operating point; fast for OGT). Becomes the lit-step dwell and the C-f bias hold. |
@@ -52,7 +57,7 @@ override any of these inline (see *Blocks*).
 | `settling_tcs` | `7` | **Per-point AC settling**, in demod time constants — instrument-set, unavoidable at low frequency. |
 | `auto_bandwidth` | `true` | Let the MFIA pick the demod bandwidth per point. |
 | `oversampling` | `1` | Demod samples averaged per point. `1` = none (the norm — auto range reads the high-Z low-f tail cleanly when wired right). A rarely-needed fallback for low-f SNR at small amplitude; multiplies per-point time, so it's slow at low f. |
-| `current_range_a` | `auto` | Fixed current-input range in **amps** (e.g. `1.0e-7` = 100 nA), or `auto`. **Leave it `auto`** — that's what the webUI uses and it handles the whole band. A wide C-f spans many decades of impedance, so a pinned range overloads at high f (the cap draws µA); only pin on a narrow low-f-only block, and validate against a reference. |
+| `current_range_a` | `auto` | Fixed current-input range in **amps** (e.g. `1.0e-7` = 100 nA), or `auto`. **`auto` for any wide (multi-decade) C-f** — a pinned range overloads at high f (the cap draws µA). **But MFIA auto-range only ratchets *up* and skips the most sensitive ranges**, so on a **narrow sub-kHz block** the high-Z low-f current is too small for it to find — there you **must pin** a sensitive range (e.g. `1.0e-8` = 10 nA) and validate against a reference. |
 | `freq.start_hz` | `1` | C-f sweep low-frequency floor (Hz). |
 | `freq.stop_hz` | `300000` | C-f sweep ceiling (Hz). |
 | `freq.points_per_decade` | `10` | C-f log-sweep density. |
@@ -188,3 +193,34 @@ illumination:
   block; the frequency sweep happens inside it.
 - **Validation** names the offending block and field, e.g.
   `block 3 (C: bias ladder @ 625nm): a c-f block needs a non-empty 'bias' list`.
+
+---
+
+## Hardware setup the plan can't encode (do these first)
+
+The plan is pure software; these bench/instrument conditions must be right or a
+syntactically-valid plan still records garbage:
+
+- **Data-server host.** The MFIA runs its **own embedded LabOne Data Server** —
+  connect to `mf-<serial>:8004` (here `mf-dev32369`), **not** `localhost`,
+  unless you deliberately run a Data Server on the PC. The headless runner and
+  the GUI Instrument panel both take this host.
+- **Wiring: DUT drive on HCUR, not HPOT.** The current-drive terminal is
+  Hcur/Lcur; HPOT/LPOT are the *sense* pair. A DUT lead on HPOT reads **open**,
+  not a device (this cost a day once).
+- **Compensation first.** Build Open/Short (plus a load standard if you have one)
+  in LabOne over the band you'll sweep (≈80 Hz–510 kHz) **before** loading the
+  plan; `compensation_enabled` only toggles *applying* the stored compensation.
+- **Biased sub-80 Hz is a hard wall.** At reverse bias the MFIA's single
+  transimpedance input shares range between DC leakage and the AC signal, so
+  below ~80 Hz the leakage swamps the measurement — that range is the B1500's
+  job, not the MFIA's. The sub-kHz tail block is therefore **0 V only**.
+- **Transients aren't a plan block.** Cp(t) through light on/off (capture cross-
+  section, recovery τ) is the separate **`mfia-ct`** tool, not a `c-f`/`c-v` block.
+
+**Run headless** (no GUI), same plan, overnight-safe (one block failing doesn't
+abort the rest), with a contact pre-check up front:
+
+```bash
+python scripts/run_plan_headless.py examples/plan_2013-3_n-Si.yaml
+```

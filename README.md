@@ -22,7 +22,9 @@ dumb analog inputs). `mfia-cf` and `mfia-ledcal` import `led_driver`; `mfia-ct`
 does not.
 
 Instrument stack:
-- **MFIA** — `zhinst` (LabOne Data Server running locally, default port 8004).
+- **MFIA** — `zhinst`. The MFIA runs its **own embedded LabOne Data Server**;
+  connect to the instrument's host `mf-<serial>:8004` (e.g. `mf-dev32369`), **not**
+  `localhost` — unless you deliberately run a separate Data Server on the PC.
 - **LED source** — `led_driver` (from PXI-AWG) + `nifpga` (real FPGA over PCIe).
 - **PM16 power meter & 33250A** — `pyvisa` + `pyvisa-py` + `ThorlabsPM100`
   (PM16 over USBTMC; 33250A over GPIB needs NI-VISA + a GPIB adapter).
@@ -72,6 +74,16 @@ mfia-ledcal --mock     # or no flag for real LED + PM16
 Instrument selection (mock vs real MFIA, device id, host, port) is also in the
 GUI's Instrument panel, so a bare launch works too.
 
+**Headless (no GUI):** run a whole `mfia-cf` plan unattended —
+
+```bash
+python scripts/run_plan_headless.py examples/plan_2013-3_n-Si.yaml
+```
+
+It connects the MFIA + LED, runs every block, does a contact pre-check, and is
+overnight-safe (one block failing doesn't abort the rest). The plan format and
+the bench prerequisites are in [`docs/measurement-plan-format.md`](docs/measurement-plan-format.md).
+
 ## Per-machine state (NOT in git)
 
 - **led_driver config** `~/.config/led_driver/config.json` — channel→wavelength
@@ -86,6 +98,13 @@ GUI's Instrument panel, so a bare launch works too.
 
 ## Notes / gotchas baked into the tools
 
+- **Probe wiring:** the DUT drive lead goes to **HCUR** (Hcur/Lcur), not HPOT —
+  HPOT/LPOT are the *sense* pair, and a DUT on HPOT reads **open**, not a device.
+- **Data-server host:** the MFIA's embedded server is `mf-<serial>:8004` (e.g.
+  `mf-dev32369`), not `localhost` (see *Instrument stack* above).
+- **Biased sub-80 Hz is a hard wall** on the MFIA (DC leakage shares the single
+  transimpedance range with the AC signal) — that band is the B1500's job; pin a
+  sensitive current range only on a *0 V* sub-kHz block.
 - **AC amplitude is V RMS** everywhere (matches the B1500 reference); the √2
   conversion to the MFIA's peak `output/amplitude` node happens once in the
   backend. Don't second-guess it.
