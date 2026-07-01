@@ -1,0 +1,85 @@
+# === B1500 OGT protocol — 2013-3 (n-Si). C-f + C-V + photo-I-V. ===
+# The B1500 counterpart to plan_2013-3_n-Si.yaml (which is the MFIA plan). Same
+# device, same illumination machinery + Mightex/LED sync — only the analyzer
+# differs. Run it with the B1500 selected:
+#
+#   .venv/bin/python scripts/run_plan_headless.py \
+#       examples/plan_b1500_2013-3_n-Si.yaml --instrument b1500 \
+#       --resource GPIB0::17::INSTR
+#   GUI: mfia-cf -> Backend "Real B1500" -> Load plan... -> Run queue
+#
+# Why the B1500 as well as the MFIA:
+#  - The MFCMU reaches 5 MHz (the MFIA stops at 500 kHz), so the C-f blocks here
+#    fill the 500 kHz-5 MHz decade the MFIA can't — the merged 0-5 MHz Cole-Cole.
+#  - The SMU does DC I-V, which the MFIA has no hardware for: the i-v block is a
+#    wavelength-resolved photo-I-V (action spectrum on the DC current).
+#  - B1500 C-f/C-V land in the SAME CSV format as the MFIA but with a B1500_
+#    filename prefix, so the two instruments' data merge without collision.
+#
+# HARDWARE (the plan can't encode these):
+#  - Transport is GPIB (address 17) or USB — the B1500 has no native LAN socket.
+#  - MFCMU AC level is V RMS directly (no sqrt(2)) and caps at 250 mV.
+#  - Build the CMU open/short/load correction in EasyEXPERT first (like MFIA comp
+#    in LabOne); the plan only sequences the sweeps.
+
+device:
+  id: "2013-3"
+  substrate: "n-Si"
+  notes: "B1500: MFCMU C-f/C-V to 5 MHz + SMU photo-I-V"
+
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_b1500"
+
+defaults:
+  amplitude_mv_rms: 30          # matches the existing B1500 C-f reference data
+  light_amplitude_mv_rms: 30    # MFCMU OSC is small-signal already
+  device_settle_s: 10
+  dark_settle_s: 10
+  freq:
+    start_hz: 1000              # MFCMU floor is 1 kHz
+    stop_hz: 5000000            # 5 MHz ceiling
+    points_per_decade: 40       # ~150 pts over 1 kHz-5 MHz (dense, like the B1500 ref)
+
+blocks:
+  # ---- C-f spectral grid (lambda x intensity) at the active biases ----
+  # n-Si is photo-active at NEGATIVE bias (depletion at reverse polarity), so
+  # the grid is weighted to the negative side; +1 V overlaps the existing B1500
+  # dark C-f for a cross-check.
+  - name: "C-f spectral grid (all biases, 1 kHz-5 MHz)"
+    type: c-f
+    bias: [-4, -2, -1, 0, 1, 2]
+    illumination:
+      mode: matrix
+      wavelengths: [385, 470, 505, 530, 590, 625, 740, 850]
+      order: randomized
+      seed: 1
+      intensities: [1, 3, 10, 30, 100]
+      dark_bracket: per-wavelength
+
+  # ---- C-V dispersion: fine bias at two frequencies ----
+  - name: "C-V dispersion (1 MHz / 100 kHz)"
+    type: c-v
+    frequencies: [1000000, 100000]
+    bias: {start_v: -7, stop_v: 7, points: 141}
+    illumination:
+      mode: matrix
+      dark_bracket: per-wavelength
+      wavelengths:
+        - {nm: 470, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 625, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 740, intensities: [1, 3, 10, 30, 100]}
+
+  # ---- photo-I-V (SMU): DC current vs bias, wavelength-resolved ----
+  # double_sweep reveals hysteresis; 1 mA compliance protects the junction.
+  # The dark brackets give the DC dark-current baseline + reversibility, exactly
+  # as the capacitance blocks do — so a photo-I-V action spectrum falls out.
+  - name: "photo-I-V action spectrum (-2..+2 V)"
+    type: iv
+    bias: {start_v: -2, stop_v: 2, points: 101}
+    i_compliance_a: 1.0e-3
+    double_sweep: true
+    delay_s: 0.01
+    illumination:
+      mode: matrix
+      dark_bracket: per-wavelength
+      wavelengths: [385, 470, 505, 530, 590, 625, 740, 850]
+      intensities: [10, 100]

@@ -37,10 +37,12 @@ from PyQt6.QtWidgets import (
 class BackendKind:
     MOCK = "Mock (synthetic)"
     REAL = "Real MFIA"
+    B1500 = "Real B1500"
     # Normalized values emitted in signals — string is cleaner than passing
     # the display label, and survives translation/relabeling.
     MOCK_KEY = "mock"
     REAL_KEY = "real"
+    B1500_KEY = "b1500"
 
 
 def _int_spin(value: int, lo: int, hi: int) -> QSpinBox:
@@ -58,11 +60,17 @@ class InstrumentPanel(QGroupBox):
         super().__init__("Instrument", parent)
         form = QFormLayout(self)
         self.backend_kind = QComboBox()
-        self.backend_kind.addItems([BackendKind.MOCK, BackendKind.REAL])
+        self.backend_kind.addItems(
+            [BackendKind.MOCK, BackendKind.REAL, BackendKind.B1500]
+        )
         self.device_id = QLineEdit("")
         self.device_id.setPlaceholderText("e.g. dev32369")
         self.host = QLineEdit("localhost")
         self.port = _int_spin(8004, 1, 65535)
+        # B1500 (VISA/GPIB) — the FLEX command set is reached over GPIB
+        # (default address 17) or USB; there is no native LAN socket.
+        self.resource = QLineEdit("GPIB0::18::INSTR")
+        self.resource.setPlaceholderText("VISA resource, e.g. GPIB0::18::INSTR")
         self.connect_btn = QPushButton("Connect")
         self.status = QLabel("Not connected.")
 
@@ -70,13 +78,16 @@ class InstrumentPanel(QGroupBox):
         form.addRow("Device ID", self.device_id)
         form.addRow("LabOne host", self.host)
         form.addRow("LabOne port", self.port)
+        form.addRow("VISA resource", self.resource)
         form.addRow(self.connect_btn)
         form.addRow(self.status)
 
-        self._real_only = [self.device_id, self.host, self.port]
-        self.backend_kind.currentTextChanged.connect(self._update_real_only_state)
+        # Which fields belong to which backend (enabled only when selected).
+        self._mfia_only = [self.device_id, self.host, self.port]
+        self._b1500_only = [self.resource]
+        self.backend_kind.currentTextChanged.connect(self._update_field_state)
         self.connect_btn.clicked.connect(self._toggle)
-        self._update_real_only_state()
+        self._update_field_state()
 
         self.backend: object | None = None
         self._kind: str | None = None
@@ -129,6 +140,21 @@ class InstrumentPanel(QGroupBox):
                 self.backend = MockMFIA()
                 self._kind = BackendKind.MOCK_KEY
                 label = "Mock backend"
+            elif kind_label == BackendKind.B1500:
+                from ..b1500 import B1500
+
+                resource = self.resource.text().strip()
+                if not resource:
+                    QMessageBox.warning(
+                        self, "Instrument",
+                        "Enter a VISA resource (e.g. GPIB0::17::INSTR).",
+                    )
+                    return
+                backend = B1500(resource)
+                backend.connect()
+                self.backend = backend
+                self._kind = BackendKind.B1500_KEY
+                label = f"B1500 {resource}"
             else:
                 from ..hardware import MFIA
 
@@ -161,7 +187,7 @@ class InstrumentPanel(QGroupBox):
         self.status.setText(f"Connected: {label}.")
         self.connect_btn.setText("Disconnect")
         self.backend_kind.setEnabled(False)
-        for w in self._real_only:
+        for w in self._mfia_only + self._b1500_only:
             w.setEnabled(False)
         self.connected.emit(self.backend, self._kind)
 
@@ -176,10 +202,13 @@ class InstrumentPanel(QGroupBox):
         self.status.setText("Not connected.")
         self.connect_btn.setText("Connect")
         self.backend_kind.setEnabled(True)
-        self._update_real_only_state()
+        self._update_field_state()
         self.disconnected.emit()
 
-    def _update_real_only_state(self) -> None:
-        is_real = self.backend_kind.currentText() == BackendKind.REAL
-        for w in self._real_only:
-            w.setEnabled(is_real)
+    def _update_field_state(self) -> None:
+        """Enable only the fields for the currently-selected backend."""
+        kind = self.backend_kind.currentText()
+        for w in self._mfia_only:
+            w.setEnabled(kind == BackendKind.REAL)
+        for w in self._b1500_only:
+            w.setEnabled(kind == BackendKind.B1500)

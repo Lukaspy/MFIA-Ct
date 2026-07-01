@@ -34,6 +34,9 @@ _TERMINAL_MODE_NODE_VALUE = {
 
 
 class MFIA:
+    # Analyzer identity stamped into every sweep's metadata / filename.
+    instrument = "MFIA"
+
     def __init__(
         self,
         device_id: str,

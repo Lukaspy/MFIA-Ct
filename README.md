@@ -25,6 +25,12 @@ Instrument stack:
 - **MFIA** — `zhinst`. The MFIA runs its **own embedded LabOne Data Server**;
   connect to the instrument's host `mf-<serial>:8004` (e.g. `mf-dev32369`), **not**
   `localhost` — unless you deliberately run a separate Data Server on the PC.
+- **B1500** — `pyvisa` (FLEX command set over **GPIB**, address 17, or USB — the
+  B1500 has no native LAN socket). An alternate `mfia-cf` backend: it runs the
+  same C-f / C-V campaigns on the MFCMU up to **5 MHz** and adds DC **I-V**
+  curves on the SMU. Pick the analyzer per session (GUI *Backend* dropdown or
+  the headless `--instrument {mfia,b1500}`); B1500 data is filed `B1500_*` so it
+  merges with `MFIA_*` without collision.
 - **LED source** — `led_driver` (from PXI-AWG) + `nifpga` (real FPGA over PCIe).
 - **PM16 power meter & 33250A** — `pyvisa` + `pyvisa-py` + `ThorlabsPM100`
   (PM16 over USBTMC; 33250A over GPIB needs NI-VISA + a GPIB adapter).
@@ -125,7 +131,8 @@ src/mfia_ct/
   config.py          C-t experiment dataclasses (incl. TerminalMode).
   cf_config.py       C-f campaign config (sweep / bias / illumination).
   hardware.py        Real MFIA backend (zhinst): C-t streaming + C-f Sweeper.
-  mock_hardware.py   Synthetic backend (C-t traces + Voigt-2-CPE C-f spectra).
+  b1500.py           Keysight B1500 backend (pyvisa/GPIB): MFCMU C-f/C-V + SMU I-V.
+  mock_hardware.py   Synthetic backends (MockMFIA + MockB1500 incl. I-V).
   experiment.py      C-t orchestrator (continuous record + paced pulses).
   cf_experiment.py   C-f orchestrator (bias × illumination × sweep loops).
   fg33250a.py        Agilent 33250A function-generator driver (GPIB).

@@ -50,6 +50,11 @@ class SweepType(str, Enum):
 
     C_F = "C-f (sweep frequency)"
     C_V = "C-V (sweep bias)"
+    # I_V: sweep DC bias with a source-measure unit and record current — a
+    # DC I-V curve, not an impedance measurement. Only the B1500 backend
+    # implements it (the MFIA has no DC SMU); ``iv`` is the swept axis and
+    # the illumination sequence is the only loop (one curve per light step).
+    I_V = "I-V (sweep bias, measure current)"
 
 
 @dataclass
@@ -135,6 +140,53 @@ class BiasSweepSettings:
             # linear for bias. Fall back to linear if someone sets it.
             return list(np.linspace(self.start_v, self.stop_v, n))
         return list(np.linspace(self.start_v, self.stop_v, n))
+
+
+@dataclass
+class IvSweepSettings:
+    """SMU voltage staircase for a DC I-V curve (B1500 backend only).
+
+    Sweeps the device voltage ``start_v`` → ``stop_v`` in ``n_points`` steps
+    and measures current at each, limited by ``i_compliance_a``. This is the
+    SMU analog of :class:`BiasSweepSettings`: there is no test frequency and
+    no AC amplitude (the source is DC). ``double_sweep`` runs the leg
+    forward-then-reverse (start → stop → start) to expose hysteresis, so the
+    returned curve then has ``2 × n_points`` points.
+
+    Maps to the B1500 ``WV`` staircase source command
+    (``WV ch,mode,range,start,stop,step,Icomp``); ``hold_s`` / ``delay_s`` map
+    to ``WT`` (settle before the first step / per-step measurement delay).
+    """
+
+    start_v: float = -2.0
+    stop_v: float = 2.0
+    n_points: int = 101          # points per leg (WV step count, 1..10001)
+    log_spacing: bool = False    # linear is the norm for an I-V curve
+    double_sweep: bool = False   # forward then reverse (hysteresis)
+    i_compliance_a: float = 0.01           # 10 mA compliance limit
+    measure_range_a: float | None = None   # None = auto current-measure range
+    hold_s: float = 0.0          # WT hold before the first measurement
+    delay_s: float = 0.0         # WT per-step measurement delay
+
+    @property
+    def values_v(self) -> list[float]:
+        """The commanded voltage points (both legs when ``double_sweep``).
+
+        Used to regenerate the source axis on the reader side — the B1500
+        appends the swept-source value to each datum, but regenerating from
+        the commanded grid is unambiguous and avoids parsing it back.
+        """
+        import numpy as np
+
+        n = max(2, int(self.n_points))
+        if self.log_spacing:
+            # Log across a bipolar range is ill-defined; callers use linear.
+            leg = list(np.linspace(self.start_v, self.stop_v, n))
+        else:
+            leg = list(np.linspace(self.start_v, self.stop_v, n))
+        if self.double_sweep:
+            return leg + list(np.linspace(self.stop_v, self.start_v, n))
+        return leg
 
 
 @dataclass
@@ -351,6 +403,9 @@ class CfConfig:
     # C-V-f map. Ignored when sweep_type is C_F (and vice-versa for sweep/bias).
     cv_frequencies_hz: list[float] = field(default_factory=lambda: [100_000.0])
     cv_bias: BiasSweepSettings = field(default_factory=BiasSweepSettings)
+    # I-V axis: swept SMU voltage (B1500 backend). Used only when
+    # sweep_type is I_V; ignored otherwise.
+    iv: IvSweepSettings = field(default_factory=IvSweepSettings)
     illumination: IlluminationSequence = field(
         default_factory=IlluminationSequence.default_interleaved
     )

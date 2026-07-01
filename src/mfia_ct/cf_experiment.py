@@ -32,8 +32,10 @@ import numpy as np
 
 from .cf_config import CfConfig, IlluminationStep, SweepType
 from .cf_storage import (
+    IvResult,
     SweepResult,
     make_cv_metadata_from_config,
+    make_iv_metadata_from_config,
     make_metadata_from_config,
 )
 from .led_source import LedSource
@@ -61,6 +63,18 @@ class _Backend(Protocol):
         stop_check: Optional[Callable[[], bool]] = None,
         light_active: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
+
+    # I-V is optional — only the B1500 backend implements it. A backend
+    # without this method can still run C-f / C-V; the experiment only calls
+    # it for an I_V-type config.
+    def run_iv_sweep(
+        self,
+        iv,
+        *,
+        progress_cb: Optional[Callable[[float], None]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
+        light_active: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]: ...
 
 
 # Progress payload emitted up to the GUI: (bias_idx, step_idx, point_idx_frac).
@@ -96,6 +110,10 @@ class CfExperiment:
     def _requires_led(self) -> bool:
         return any(not s.is_dark for s in self.cfg.illumination.steps)
 
+    def _instrument(self) -> str:
+        """Analyzer identity for the metadata ('MFIA' / 'B1500')."""
+        return getattr(self.backend, "instrument", "MFIA")
+
     def run(self) -> Iterator[SweepResult]:
         if self._requires_led() and self.led is None:
             raise RuntimeError(
@@ -112,6 +130,8 @@ class CfExperiment:
 
             if self.cfg.sweep_type == SweepType.C_V:
                 yield from self._run_cv()
+            elif self.cfg.sweep_type == SweepType.I_V:
+                yield from self._run_iv()
             else:
                 yield from self._run_cf()
         finally:
@@ -169,6 +189,7 @@ class CfExperiment:
                     step,
                     led_current_ma=self._current_ma_for(step),
                     optical_power_mw=self._optical_power_for(step),
+                    instrument=self._instrument(),
                 )
                 yield SweepResult(
                     frequency_hz=freq,
@@ -217,6 +238,7 @@ class CfExperiment:
                     step,
                     led_current_ma=self._current_ma_for(step),
                     optical_power_mw=self._optical_power_for(step),
+                    instrument=self._instrument(),
                 )
                 # frequency_hz broadcast to the bias grid so the Cp/Rp ω-math
                 # in SweepResult stays identical to the C-f path.
@@ -229,6 +251,57 @@ class CfExperiment:
                     sweep_type="C-V",
                     metadata=meta,
                 )
+
+    def _run_iv(self) -> Iterator[IvResult]:
+        """I-V: illumination is the only loop; the SMU sweeps voltage itself.
+
+        Mirrors the inner loop of ``_run_cv`` — the same illumination / LED /
+        dark-bracket machinery — but the swept axis is the SMU voltage
+        staircase and the measured quantity is current, so one I-V *curve* is
+        produced per illumination step (no bias / frequency outer loop). The
+        photo-response falls straight out of the dark-vs-lit curves, exactly
+        like the C-f/C-V action spectrum. Only a backend with ``run_iv_sweep``
+        (the B1500) can serve this; a config reaches here only when it is an
+        I_V-type block, so the plan/GUI never route I-V to the MFIA.
+        """
+        if not hasattr(self.backend, "run_iv_sweep"):
+            raise RuntimeError(
+                "This backend has no SMU — I-V sweeps need the B1500. Select "
+                "the B1500 instrument (the MFIA cannot measure DC I-V)."
+            )
+        for si, step in enumerate(self.cfg.illumination.steps):
+            if self._stopped():
+                return
+            self._apply_illumination(step)
+            self._sleeper(step.settle_s, self._stopped)
+            if self._stopped():
+                return
+
+            def _per_point(frac: float, si=si) -> None:
+                if self._progress_cb is not None:
+                    try:
+                        self._progress_cb(0, si, frac)
+                    except Exception:
+                        pass
+
+            bias_v, current_a = self.backend.run_iv_sweep(
+                self.cfg.iv,
+                progress_cb=_per_point,
+                stop_check=self._stopped,
+                light_active=not step.is_dark,
+            )
+            meta = make_iv_metadata_from_config(
+                self.cfg,
+                step,
+                led_current_ma=self._current_ma_for(step),
+                optical_power_mw=self._optical_power_for(step),
+                instrument=self._instrument(),
+            )
+            yield IvResult(
+                voltage_v=bias_v,
+                current_a=current_a,
+                metadata=meta,
+            )
 
     def _apply_illumination(self, step: IlluminationStep) -> None:
         # Drop the drive for lit steps (and restore it for dark) when a separate

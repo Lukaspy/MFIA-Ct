@@ -22,6 +22,7 @@ from .config import CtConfig
 class MockMFIA:
     device_id = "mock"
     device = "mock"
+    instrument = "MFIA"
 
     def __init__(self, seed: int = 0) -> None:
         self._rng = np.random.default_rng(seed)
@@ -290,3 +291,57 @@ class MockMFIA:
         noise_real = self._rng.normal(0, 0.001, n) * np.abs(z)
         noise_imag = self._rng.normal(0, 0.001, n) * np.abs(z)
         return bias, z.real + noise_real, z.imag + noise_imag
+
+
+class MockB1500(MockMFIA):
+    """Synthetic B1500 backend for the ``--mock`` path and tests.
+
+    Reuses ``MockMFIA``'s C-f / C-V synthetic spectra (the MFCMU measures the
+    same complex impedance the MFIA does) and adds a synthetic SMU I-V curve,
+    so the whole B1500 code path — C-f, C-V, and I-V under illumination — runs
+    without an instrument. ``instrument = "B1500"`` so results are filed and
+    merged distinctly from MFIA data.
+    """
+
+    device_id = "mock-b1500"
+    device = "mock-b1500"
+    instrument = "B1500"
+
+    def run_iv_sweep(
+        self,
+        iv,
+        *,
+        progress_cb: Optional[Callable[[float], None]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
+        light_active: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Synthesize a Shockley-diode I-V, with light adding a photocurrent.
+
+        I = Is·(exp(V/nVt) − 1); illumination subtracts a photocurrent Iph so
+        the lit curve sits below dark in reverse bias (fourth-quadrant photo
+        response). Clamped to the configured compliance, matching how the real
+        SMU would fold back at the current limit.
+        """
+        v = np.asarray(iv.values_v, dtype=float)
+        npts = len(v)
+        i_sat = 1e-11
+        ideality = 1.6
+        vt = 0.025852
+        current = i_sat * (np.exp(v / (ideality * vt)) - 1.0)
+        if light_active:
+            current = current - 5e-6  # photocurrent
+        comp = abs(iv.i_compliance_a)
+        current = np.clip(current, -comp, comp)
+
+        t_per_point = 0.002
+        for k in range(npts):
+            time.sleep(t_per_point)
+            if progress_cb is not None and (k % max(1, npts // 20) == 0):
+                progress_cb((k + 1) / npts)
+            if stop_check is not None and stop_check():
+                return v[: k + 1], current[: k + 1]
+        if progress_cb is not None:
+            progress_cb(1.0)
+
+        noise = self._rng.normal(0, 1e-12, npts)
+        return v, current + noise

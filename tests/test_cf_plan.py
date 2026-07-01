@@ -120,7 +120,31 @@ def test_cv_block_needs_bias_mapping_and_frequencies() -> None:
 
 def test_unknown_block_type_rejected() -> None:
     with pytest.raises(PlanError, match="c-f.*c-v|type"):
-        parse_plan(_minimal(blocks=[{"name": "x", "type": "c-t",
+        parse_plan(_minimal(blocks=[{"name": "x", "type": "c-z",
+                                     "illumination": {"dark_only": True}}]))
+
+
+def test_iv_block_parses_to_iv_sweep() -> None:
+    cfg = parse_plan(_minimal(blocks=[{
+        "name": "iv", "type": "iv",
+        "bias": {"start_v": -2, "stop_v": 2, "points": 51},
+        "i_compliance_a": 0.005, "double_sweep": True,
+        "illumination": {"mode": "fixed",
+                         "steps": ["dark", {"wl": 470, "intensity": 100}]},
+    }]))[0]
+    assert cfg.sweep_type == SweepType.I_V
+    assert cfg.iv.start_v == -2.0 and cfg.iv.stop_v == 2.0
+    assert cfg.iv.n_points == 51
+    assert cfg.iv.i_compliance_a == 0.005
+    assert cfg.iv.double_sweep is True
+    # double sweep -> forward + reverse legs.
+    assert len(cfg.iv.values_v) == 2 * 51
+    assert cfg.iv.values_v[0] == -2.0
+
+
+def test_iv_block_requires_bias_mapping() -> None:
+    with pytest.raises(PlanError, match="i-v bias|start_v, stop_v"):
+        parse_plan(_minimal(blocks=[{"name": "iv", "type": "iv",
                                      "illumination": {"dark_only": True}}]))
 
 

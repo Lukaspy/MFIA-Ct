@@ -91,7 +91,7 @@ Each block is one campaign and becomes one queued entry. Common keys:
 | Key | Required | Meaning |
 |-----|----------|---------|
 | `name` | recommended | Label shown in the queue and in error messages. |
-| `type` | **yes** | `c-f` or `c-v`. |
+| `type` | **yes** | `c-f`, `c-v`, or `i-v` (`i-v` is **B1500-only** — the MFIA has no DC SMU). |
 | `illumination` | **yes** | Illumination spec (below). |
 | *overrides* | no | Any `defaults` key (incl. a nested `freq:`) set here applies to this block only — e.g. a longer `device_settle_s` or a lower `freq.start_hz`. |
 
@@ -122,6 +122,28 @@ The frequency sweep comes from `defaults.freq` (override with a block-level
 List them **high→low** so the fast, reliable data lands first. Loop nesting:
 **frequency → illumination → bias sweep**. (Total bias sweeps = frequencies ×
 illumination steps — multi-frequency C-V with a big matrix gets large.)
+
+### I-V block (B1500 only)
+
+```yaml
+- name: "..."
+  type: i-v
+  bias: {start_v: -2, stop_v: 2, points: 101}   # the swept SMU voltage axis
+  i_compliance_a: 1.0e-3        # current compliance (A); default 0.01
+  double_sweep: true            # forward then reverse (hysteresis); default false
+  measure_range_a: auto         # fixed current-measure range (A) or auto; default auto
+  hold_s: 0.0                   # settle before the first step
+  delay_s: 0.0                  # per-step measurement delay
+  illumination: { ... }         # one I-V curve per illumination step
+```
+
+A DC **I-V curve** measured by the B1500 SMU (the MFIA can't do this — a plan
+with an `i-v` block only runs on the B1500). There is no test frequency and no
+AC amplitude; the SMU sweeps the device voltage `start_v → stop_v` and records
+current, limited by `i_compliance_a`. Loop nesting is just **illumination → the
+SMU staircase**, so the dark brackets give the DC dark-current baseline and each
+lit step a photo-I-V — a current-domain action spectrum, the DC analog of the
+C-f/C-V one. `double_sweep: true` returns `2 × points` (forward then reverse).
 
 ---
 
@@ -217,6 +239,33 @@ syntactically-valid plan still records garbage:
   job, not the MFIA's. The sub-kHz tail block is therefore **0 V only**.
 - **Transients aren't a plan block.** Cp(t) through light on/off (capture cross-
   section, recovery τ) is the separate **`mfia-ct`** tool, not a `c-f`/`c-v` block.
+
+### Choosing the analyzer: MFIA vs B1500
+
+A plan is **instrument-agnostic** — the same file runs on either analyzer; you
+pick one **per session** (the GUI's *Backend* dropdown, or the headless runner's
+`--instrument`). The blocks stay the same; the backend interprets them.
+
+- **Headless:** `--instrument mfia` (default) or
+  `--instrument b1500 --resource GPIB0::17::INSTR`.
+- **GUI:** *Backend* → *Real B1500*, enter the VISA resource, Connect.
+
+B1500-specific facts the plan can't encode:
+
+- **Transport is GPIB (address 17) or USB — not LAN.** The B1500's FLEX command
+  set has no native socket listener; "network" control means a GPIB↔LAN gateway
+  or IO-Libraries remote-GPIB, which is still just a different VISA resource
+  string (e.g. `TCPIP0::<gateway>::gpib0,17::INSTR`).
+- **MFCMU range:** frequency **1 kHz–5 MHz** (so a B1500 C-f plan sets
+  `freq.start_hz: 1000`), AC level is **V RMS directly** (no √2) and caps at
+  **250 mV** — the driver clamps to both.
+- **Build the CMU correction (open/short/load) in EasyEXPERT first**, like MFIA
+  compensation in LabOne; the plan only sequences the sweeps.
+- **`i-v` blocks need an SMU** — they error on the MFIA.
+- **Data is filed with an instrument prefix** (`MFIA_*` vs `B1500_*`) and the CSV
+  header records `# instrument:`, so a device's MFIA and B1500 data don't collide
+  and merge cleanly (the reason to run both: B1500 covers 500 kHz–5 MHz the MFIA
+  can't). Worked example: [`examples/plan_b1500_2013-3_n-Si.yaml`](../examples/plan_b1500_2013-3_n-Si.yaml).
 
 **Run headless** (no GUI), same plan, overnight-safe (one block failing doesn't
 abort the rest), with a contact pre-check up front:

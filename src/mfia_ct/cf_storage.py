@@ -66,11 +66,18 @@ class SweepMetadata:
     # native commanded value for this hardware.
     led_current_ma: Optional[float] = None
     optical_power_mw: Optional[float] = None  # measured separately; null if not entered
-    sweep_type: str = "C-f"  # "C-f" (swept freq) or "C-V" (swept bias)
+    sweep_type: str = "C-f"  # "C-f" (swept freq), "C-V" (swept bias), "I-V"
     fixed_frequency_hz: Optional[float] = None  # the held test frequency for C-V
     settling_tcs: Optional[float] = None  # per-point AC settling (demod TCs)
     current_range_a: Optional[float] = None  # fixed input range (A); None = auto
     oversampling: Optional[int] = None  # demod samples averaged per point
+    # Which analyzer produced this sweep — "MFIA" or "B1500". Drives the CSV
+    # filename prefix and is recorded in the header so MFIA + B1500 data can be
+    # told apart (and merged) downstream. Defaults to "MFIA" so existing
+    # filenames/headers are unchanged.
+    instrument: str = "MFIA"
+    # SMU current compliance for an I-V sweep (A); None for C-f/C-V.
+    i_compliance_a: Optional[float] = None
 
 
 @dataclass
@@ -176,12 +183,17 @@ def make_filename(meta: SweepMetadata, ts: Optional[datetime] = None) -> str:
     stamp = when.strftime("%Y%m%d_%H%M%S")
     device = meta.device_id or "unknown"
     illum = meta.illumination_label or "unknown"
+    # Prefix the file with the analyzer so MFIA and B1500 data are distinct
+    # (e.g. B1500_Cf_*); defaults to MFIA so existing filenames are unchanged.
+    prefix = getattr(meta, "instrument", None) or "MFIA"
+    if meta.sweep_type == "I-V":
+        return f"{prefix}_IV_{device}_{illum}_{stamp}.csv"
     if meta.sweep_type == "C-V":
         # C-V files key on the held test frequency (bias is the swept axis).
         freq = _fmt_freq(meta.fixed_frequency_hz or 0.0)
-        return f"MFIA_CV_{device}_f{freq}_{illum}_{stamp}.csv"
+        return f"{prefix}_CV_{device}_f{freq}_{illum}_{stamp}.csv"
     bias = _fmt_bias(meta.bias_v_commanded)
-    return f"MFIA_Cf_{device}_Vb{bias}_{illum}_{stamp}.csv"
+    return f"{prefix}_Cf_{device}_Vb{bias}_{illum}_{stamp}.csv"
 
 
 def make_metadata_from_config(
@@ -194,6 +206,7 @@ def make_metadata_from_config(
     led_current_ma: Optional[float] = None,
     sweep_type: str = "C-f",
     fixed_frequency_hz: Optional[float] = None,
+    instrument: str = "MFIA",
 ) -> SweepMetadata:
     """Bundle CfConfig + the active (bias, illumination) into a flat metadata
     record. Convenient single source of truth for both the filename and
@@ -201,7 +214,8 @@ def make_metadata_from_config(
 
     For C-f, ``bias_v`` is the held bias and ``fixed_frequency_hz`` is None.
     For C-V, pass ``sweep_type="C-V"`` with ``bias_v=nan`` (bias is swept) and
-    ``fixed_frequency_hz`` set to the held test frequency.
+    ``fixed_frequency_hz`` set to the held test frequency. ``instrument`` is
+    the analyzer identity ("MFIA" / "B1500") for the filename and header.
     """
     when = (timestamp or datetime.now()).isoformat(timespec="seconds")
     # Actual drive for this step (lit steps may use a lower light amplitude).
@@ -227,6 +241,7 @@ def make_metadata_from_config(
         settling_tcs=settling,
         current_range_a=cfg.ia.current_range_a,
         oversampling=swept.averaging_samples,
+        instrument=instrument,
     )
 
 
@@ -238,6 +253,7 @@ def make_cv_metadata_from_config(
     timestamp: Optional[datetime] = None,
     optical_power_mw: Optional[float] = None,
     led_current_ma: Optional[float] = None,
+    instrument: str = "MFIA",
 ) -> SweepMetadata:
     """C-V metadata: bias is the swept axis, so ``bias_v_commanded`` is NaN and
     the held test frequency is recorded in ``fixed_frequency_hz``."""
@@ -250,6 +266,39 @@ def make_cv_metadata_from_config(
         led_current_ma=led_current_ma,
         sweep_type="C-V",
         fixed_frequency_hz=fixed_freq_hz,
+        instrument=instrument,
+    )
+
+
+def make_iv_metadata_from_config(
+    cfg: CfConfig,
+    step: IlluminationStep,
+    *,
+    timestamp: Optional[datetime] = None,
+    optical_power_mw: Optional[float] = None,
+    led_current_ma: Optional[float] = None,
+    instrument: str = "B1500",
+) -> SweepMetadata:
+    """I-V metadata: voltage is the swept axis (``bias_v_commanded`` NaN) and
+    the source is DC (no AC amplitude), so the amplitude fields are 0. The
+    SMU compliance is recorded in ``i_compliance_a``."""
+    when = (timestamp or datetime.now()).isoformat(timespec="seconds")
+    return SweepMetadata(
+        device_id=cfg.run.device_id,
+        substrate_type=cfg.run.substrate_type,
+        bias_v_commanded=float("nan"),
+        illumination_label=step.label,
+        wavelength_nm=0.0 if step.is_dark else float(step.wavelength_nm),
+        led_intensity_pct=None if step.is_dark else step.intensity_pct,
+        amplitude_vrms=0.0,  # SMU source is DC — no AC test signal
+        amplitude_vpk=0.0,
+        timestamp=when,
+        notes=cfg.run.notes,
+        led_current_ma=led_current_ma,
+        optical_power_mw=optical_power_mw,
+        sweep_type="I-V",
+        instrument=instrument,
+        i_compliance_a=cfg.iv.i_compliance_a,
     )
 
 
@@ -271,6 +320,7 @@ def write_sweep_csv(result: SweepResult, path: Path | str) -> Path:
     with out.open("w", newline="") as f:
         # Commented metadata block — easy for both humans and the loader.
         meta = result.metadata
+        f.write(f"# instrument: {getattr(meta, 'instrument', 'MFIA')}\n")
         f.write(f"# device_id: {meta.device_id}\n")
         f.write(f"# substrate_type: {meta.substrate_type}\n")
         f.write(f"# sweep_type: {meta.sweep_type}\n")
@@ -318,4 +368,68 @@ def write_sweep_csv(result: SweepResult, path: Path | str) -> Path:
                     f"{bias_col[i]:.9g}",
                 ]
             )
+    return out
+
+
+# --- I-V (SMU) output --------------------------------------------------------
+
+IV_CSV_COLUMNS = ["voltage_v", "current_a"]
+
+
+@dataclass
+class IvResult:
+    """Raw output of one SMU I-V sweep, before CSV serialization.
+
+    ``voltage_v`` is the swept source axis and ``current_a`` the measured
+    current at each point (both legs, when the sweep was a double sweep).
+    ``status`` optionally carries the per-point SMU status letter (``N`` =
+    normal, ``C``/``T`` = compliance, ``V`` = over-range) for QA.
+    """
+
+    voltage_v: np.ndarray
+    current_a: np.ndarray
+    metadata: SweepMetadata
+    status: Optional[list] = None
+    extra: dict = field(default_factory=dict)
+
+
+def write_iv_csv(result: IvResult, path: Path | str) -> Path:
+    """Write a single I-V sweep CSV: commented metadata header, then V/I rows.
+
+    Same header conventions as the C-f/C-V writer (``# key: value`` block) so
+    the analysis side parses it identically; the data columns are voltage_v,
+    current_a (+ an optional per-point SMU status column).
+    """
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    meta = result.metadata
+    v = np.asarray(result.voltage_v, dtype=float)
+    cur = np.asarray(result.current_a, dtype=float)
+    has_status = result.status is not None and len(result.status) == len(v)
+
+    with out.open("w", newline="") as f:
+        f.write(f"# instrument: {getattr(meta, 'instrument', 'B1500')}\n")
+        f.write(f"# device_id: {meta.device_id}\n")
+        f.write(f"# substrate_type: {meta.substrate_type}\n")
+        f.write(f"# sweep_type: {meta.sweep_type}\n")
+        f.write(f"# illumination_label: {meta.illumination_label}\n")
+        f.write(f"# wavelength_nm: {meta.wavelength_nm}\n")
+        pct = "none" if meta.led_intensity_pct is None else meta.led_intensity_pct
+        f.write(f"# led_intensity_pct: {pct}\n")
+        ma = "none" if meta.led_current_ma is None else meta.led_current_ma
+        f.write(f"# led_current_ma: {ma}\n")
+        comp = "none" if meta.i_compliance_a is None else meta.i_compliance_a
+        f.write(f"# i_compliance_a: {comp}\n")
+        if meta.optical_power_mw is not None:
+            f.write(f"# optical_power_mw: {meta.optical_power_mw}\n")
+        f.write(f"# timestamp: {meta.timestamp}\n")
+        if meta.notes:
+            f.write(f"# notes: {meta.notes}\n")
+        w = csv.writer(f)
+        w.writerow(IV_CSV_COLUMNS + (["status"] if has_status else []))
+        for i in range(len(v)):
+            row = [f"{v[i]:.9g}", f"{cur[i]:.9g}"]
+            if has_status:
+                row.append(str(result.status[i]))
+            w.writerow(row)
     return out

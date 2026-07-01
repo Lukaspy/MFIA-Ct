@@ -504,7 +504,10 @@ class CfControlPanel(QWidget):
         st_box = QGroupBox("Measurement")
         st_form = QFormLayout(st_box)
         self.sweep_type = QComboBox()
-        for st in SweepType:
+        # C-f and C-V have swept-axis editor pages; I-V (B1500 SMU) is driven
+        # via a plan / the headless runner until its GUI page is added, so it
+        # is intentionally not offered here.
+        for st in (SweepType.C_F, SweepType.C_V):
             self.sweep_type.addItem(st.value, userData=st)
         st_form.addRow("Sweep type", self.sweep_type)
         layout.addWidget(st_box)

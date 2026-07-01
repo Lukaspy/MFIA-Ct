@@ -36,6 +36,7 @@ from .cf_config import (
     CfConfig,
     IlluminationSequence,
     IlluminationStep,
+    IvSweepSettings,
     RunMetadata,
     SweeperSettings,
     SweepType,
@@ -389,7 +390,42 @@ def _block_to_config(
             run=run,
         )
 
-    raise PlanError(f"block 'type' must be 'c-f' or 'c-v', got {block.get('type')!r}.")
+    if typ in ("i-v", "iv"):
+        # SMU I-V curve (B1500 only). The swept axis is the SMU voltage; the
+        # illumination sequence is the only loop (one curve per light step).
+        bias = block.get("bias")
+        if not isinstance(bias, dict):
+            raise PlanError(
+                "an i-v block needs 'bias: {start_v, stop_v, points}' (the swept "
+                "SMU voltage axis)."
+            )
+        for key in ("start_v", "stop_v", "points"):
+            if key not in bias:
+                raise PlanError(f"i-v bias is missing '{key}'.")
+        iv = IvSweepSettings(
+            start_v=float(bias["start_v"]),
+            stop_v=float(bias["stop_v"]),
+            n_points=int(bias["points"]),
+            log_spacing=bool(block.get("log_spacing", False)),
+            double_sweep=bool(block.get("double_sweep", False)),
+            i_compliance_a=float(block.get("i_compliance_a", 0.01)),
+            measure_range_a=_parse_current_range(block.get("measure_range_a"), None),
+            hold_s=float(block.get("hold_s", 0.0)),
+            delay_s=float(block.get("delay_s", 0.0)),
+        )
+        ia = _build_ia(d, 0.0)  # SMU is DC; the IA fields are unused for I-V
+        return CfConfig(
+            ia=ia,
+            amplitude_unit=AmplitudeUnit.VRMS,
+            sweep_type=SweepType.I_V,
+            iv=iv,
+            illumination=illum,
+            run=run,
+        )
+
+    raise PlanError(
+        f"block 'type' must be 'c-f', 'c-v', or 'i-v', got {block.get('type')!r}."
+    )
 
 
 # --- Public API -------------------------------------------------------------
