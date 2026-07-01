@@ -21,11 +21,11 @@
 # open/short (standard) over 80 Hz-510 kHz first.
 
 device:
-  id: "2013-3"
-  substrate: "n-Si"
+  id: "2013-4"
+  substrate: "nitride"
   notes: "Complete OGT photo-capacitance: spectral matrix x bias x frequency"
 
-output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_completerun"
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-4_nitride"
 
 defaults:
   amplitude_mv_rms: 100         # dark high-Z drive (linear; 30 mV too small for low-f)
