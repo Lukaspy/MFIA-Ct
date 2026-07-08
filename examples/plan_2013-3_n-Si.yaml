@@ -16,9 +16,11 @@
 #   Headless: .venv/bin/python scripts/run_plan_headless.py examples/plan_2013-3_n-Si.yaml
 #             (does a contact pre-check and aborts if the probe reads open)
 #
-# RUNTIME ~4 h. The all-bias spectral grid is the long pole (~2.5 h). To shorten,
-# trim the `bias` list or the `intensities` in the spectral block. Compensate
-# open/short (standard) over 80 Hz-510 kHz first.
+# RUNTIME ~12 h (weekend run). Long poles: the all-bias spectral grid (~2.5 h)
+# and the sub-kHz 100% lit ladder (~6-9 h: 90 slow low-f sweeps). To shorten,
+# trim `bias` lists or the lit ladder's wavelengths. Compensate open/short
+# (standard) over 1 Hz-500 kHz first (500 kHz model ceiling; BIAS OFF during
+# compensation -- bias into a short standard overloads the current input).
 
 device:
   id: "2013-3"
@@ -74,11 +76,15 @@ blocks:
   # 0 V + low leakage reads clean to 1 Hz on a pinned sensitive range. Bright light
   # overloads the 10 nA range, so DIM only (1-3 %). (-2 V and other biased sub-80-Hz
   # are DC-leakage-limited on the MFIA -> that range is the B1500's job.)
-  - name: "sub-kHz tail @ 0 V (1-30 Hz, 10 nA)"
+  # NB 2026-07-06: pin raised 10 nA -> 1 uA. Measured broadband noise (28 nA
+  # RMS / 135 nA peaks, >58 kHz) statistically clips anything below ~1 uA;
+  # the June 10 nA validation predates the current EMI environment.
+  - name: "sub-kHz tail @ 0 V (1-30 Hz, 1 uA)"
     type: c-f
     bias: [0]
-    current_range_a: 1.0e-8
+    current_range_a: 1.0e-6
     oversampling: 10
+    averaging_tcs: 15
     settling_tcs: 20
     freq: {start_hz: 1, stop_hz: 30, points_per_decade: 10}
     illumination:
@@ -88,6 +94,86 @@ blocks:
         - {nm: 470, intensities: [1, 3]}
         - {nm: 625, intensities: [1, 3]}
         - {nm: 740, intensities: [1, 3]}
+
+  # ==== BIASED sub-kHz suite (1 Hz tail at every bias) ====================
+  # Re-opens the June "biased sub-80 Hz hard wall" (which was largely EMI noise
+  # in disguise). Pins are sized from the REMOTE PRE-FLIGHT (2026-07-02) and the
+  # pre-run noise check (2026-07-06: broadband >58 kHz noise 28 nA RMS / 135 nA
+  # worst peak; <58 kHz only +/-4 nA; dark DC < 1 nA at ALL biases to +/-7 V):
+  #   * 100 nA pin RETIRED -- 4-sigma noise excursions clip it statistically.
+  #   * The device is POLARITY-ASYMMETRIC: positive bias = stationary depleting
+  #     cap (1.16/0.78/0.58 nF at +2/+4/+7 V); negative bias = AC-conducting,
+  #     DC-blocking, NON-STATIONARY (impedance drifts with bias history) --
+  #     blocks are split by polarity, each with a matched pin and amplitude.
+  #   * FW QUIRK (fw 26.04): OVERFLOW-I flag reads constantly true on the 10 uA
+  #     range even at nA signals -- distrust flags on that range only.
+  # Nobody else covers this band (B1500 MFCMU floor = 1 kHz); it's where the
+  # conductance-method (Gp/w vs f -> Dit) data lives. Expect Cp Suppression
+  # below the leakage corner -- read Gp there (raw Z/G/B always exported).
+
+  # ---- dark ladder, POSITIVE biases @ 1 uA, 100 mV ----
+  # Clean stationary caps. 1 Hz currents are small (0.5-2.4 nA = 0.05-0.24% FS
+  # on 1 uA) -- thin but measured clean in pre-flight (no underflow flag);
+  # oversampling+settling carry the SNR. Stop at 80 Hz: the 0 V state varies
+  # (991 kOhm..180 kOhm @80 Hz observed) so the current ceiling is uncertain
+  # above that; the main 80 Hz+ grid covers the rest.
+  - name: "sub-kHz dark ladder, positive bias (1-80 Hz, 1 uA)"
+    type: c-f
+    bias: [0, 1, 2, 4, 7]
+    current_range_a: 1.0e-6
+    oversampling: 10
+    averaging_tcs: 15
+    settling_tcs: 20
+    device_settle_s: 20
+    freq: {start_hz: 1, stop_hz: 80, points_per_decade: 10}
+    illumination: {dark_only: true}
+
+  # ---- dark ladder, NEGATIVE biases @ 1 uA, 30 mV ----
+  # Negative bias is AC-conducting (drifty ~60-100 kOhm at -2 V): at 100 mV the
+  # current (~1.5 uA) overflows 1 uA, and the flag-quirky 10 uA pin is the only
+  # alternative. 30 mV (amplitude-linearity VERIFIED flat 10-100 mV at -2 V)
+  # keeps every negative bias <= ~0.6 uA -> trustworthy 1 uA pin. 30 mV also
+  # matches the B1500-era convention. Longer device_settle because the negative
+  # regime re-equilibrates slowly after a bias step (non-stationary).
+  - name: "sub-kHz dark ladder, negative bias (1-300 Hz, 1 uA, 30 mV)"
+    type: c-f
+    bias: [-1, -2, -4, -7]
+    amplitude_mv_rms: 30
+    current_range_a: 1.0e-6
+    oversampling: 10
+    averaging_tcs: 15
+    settling_tcs: 20
+    device_settle_s: 30
+    freq: {start_hz: 1, stop_hz: 300, points_per_decade: 10}
+    illumination: {dark_only: true}
+
+  # ---- 100% lit ladder @ 10 uA, all wavelengths, all biases ----
+  # 10 uA pin: negative-bias dark brackets alone draw ~1.5 uA at 100 mV, and
+  # 100% photocurrent rides on top (magnitude never measured -- SPOT-CHECK the
+  # first lit sweep; if it overloads, bump to 1.0e-4). NB the OVERFLOW-I flag
+  # is unreliable on this range (fw quirk) -- judge overload by the data
+  # (|Z| discontinuities), and cross-check dark points against the dark blocks.
+  # 2026-07-07: pin raised 10 uA -> 1 mA. The completed campaign MEASURED lit
+  # currents to 665 uA at -7 V (post-light-soak conductive state) -- 10 uA would
+  # clip catastrophically. 1 mA = validated by the successful Jul-6 run.
+  # 2026-07-07 23:xx: pin raised 1 mA -> 10 mA. Tonight's run measured lit
+  # -7 V / 740 nm minZ = 24 ohm -> 1.67 mA at 40 mV = 167% of the 1 mA pin
+  # (clipped the deepest lit points). 10 mA (100 V/A, 5 MHz BW) covers it.
+  - name: "sub-kHz 100% lit ladder (1-300 Hz, 10 mA, all lambda)"
+    type: c-f
+    bias: [-7, -4, -2, -1, 0, 1, 2, 4, 7]
+    current_range_a: 1.0e-2
+    oversampling: 10
+    averaging_tcs: 10
+    settling_tcs: 20
+    device_settle_s: 20
+    freq: {start_hz: 1, stop_hz: 300, points_per_decade: 10}
+    illumination:
+      mode: matrix
+      wavelengths: [385, 470, 505, 530, 590, 625, 740, 850]
+      intensities: [100]
+      order: as-listed
+      dark_bracket: ends
 
   # ---- C-V dispersion: fine bias resolution at 2 frequencies ----
   # 141-point C-V -> Mott-Schottky (1/C^2 vs V) + the fine bias-dependence of the
@@ -108,3 +194,14 @@ blocks:
         - {nm: 625, intensities: [1, 3, 10, 30, 100]}
         - {nm: 740, intensities: [1, 3, 10, 30, 100]}
         - {nm: 850, intensities: [1, 3, 10, 30, 100]}
+
+  # ---- QA anchor: repeat of block 1 at the very END of the run ----
+  # The device state is bias/illumination-history dependent (pre-flight: the 0 V
+  # state changed ~5x after a bias workout). Re-measuring the +1 V dark C-f as
+  # the LAST block quantifies how much the whole campaign moved the device:
+  # compare to the first block -- overlap = trustworthy campaign; shift = the
+  # drift bound on everything in between.
+  - name: "QA anchor: dark @ +1 V (end-of-run drift check)"
+    type: c-f
+    bias: [1]
+    illumination: {dark_only: true}

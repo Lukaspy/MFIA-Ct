@@ -1,0 +1,30 @@
+# Patch (2026-07-06 22:5x): dark negative ladder re-run at 1 mA -- the 100 uA
+# version clipped at -4/-7 V when held bias re-collapsed the ON state mid-sweep.
+device:
+  id: "2013-3"
+  substrate: "n-Si"
+  notes: "PATCH: negative dark sub-kHz ladder at 1 mA pin"
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_completerun"
+defaults:
+  amplitude_mv_rms: 100
+  light_amplitude_mv_rms: 40
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 10
+  dark_settle_s: 10
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 1
+  current_range_a: auto
+  freq: {start_hz: 80, stop_hz: 500000, points_per_decade: 10}
+blocks:
+  - name: "sub-kHz dark ladder, negative bias PATCH (1-300 Hz, 1 mA, 30 mV)"
+    type: c-f
+    bias: [-1, -2, -4, -7]
+    amplitude_mv_rms: 30
+    current_range_a: 1.0e-3
+    oversampling: 10
+    settling_tcs: 20
+    device_settle_s: 30
+    freq: {start_hz: 1, stop_hz: 300, points_per_decade: 10}
+    illumination: {dark_only: true}

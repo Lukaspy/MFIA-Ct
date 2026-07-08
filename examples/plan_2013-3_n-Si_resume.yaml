@@ -1,0 +1,90 @@
+# === RESUME plan (2026-07-06 13:40): re-run blocks 5-8 of plan_2013-3_n-Si ===
+# The 10:50 campaign completed blocks 1-4 cleanly (QA, spectral grid, 0 V tail,
+# positive dark ladder). Blocks 5-6 overloaded at negative bias: 2.5 h of
+# light-soak left the negative-bias dark state at ~6-18 kOhm (was 60-540 kOhm
+# pre-illumination) -> 30 mV drives ~1.6 uA (> the 1 uA pin) and lit -7 V drives
+# ~16 uA (> the 10 uA pin). Fix per the plan's own spot-check instruction:
+# negative-bias-containing sub-kHz blocks repinned to 100 uA (1.6-16 uA =
+# 1.6-16% FS -- healthy, and flags are trustworthy on this range).
+# Blocks 7-8 (C-V, QA anchor) unchanged. Same output_dir; files timestamped, no
+# collisions. NOTE for analysis: block-5/6 data in this file reflects the
+# POST-LIGHT-SOAK device state, sequenced after the full spectral grid.
+
+device:
+  id: "2013-3"
+  substrate: "n-Si"
+  notes: "RESUME of 2026-07-06 campaign: sub-kHz negative/lit blocks repinned 100 uA + C-V + end QA anchor"
+
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_completerun"
+
+defaults:
+  amplitude_mv_rms: 100
+  light_amplitude_mv_rms: 40
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 10
+  dark_settle_s: 10
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 1
+  current_range_a: auto
+  freq:
+    start_hz: 80
+    stop_hz: 500000
+    points_per_decade: 10
+
+blocks:
+  # ---- dark ladder, NEGATIVE biases @ 100 uA, 30 mV (rerun of block 5) ----
+  # Post-light-soak negative dark state ~18 kOhm -> 30 mV = 1.6 uA = 1.6% FS.
+  - name: "sub-kHz dark ladder, negative bias RERUN (1-300 Hz, 100 uA, 30 mV)"
+    type: c-f
+    bias: [-1, -2, -4, -7]
+    amplitude_mv_rms: 30
+    current_range_a: 1.0e-4
+    oversampling: 10
+    settling_tcs: 20
+    device_settle_s: 30
+    freq: {start_hz: 1, stop_hz: 300, points_per_decade: 10}
+    illumination: {dark_only: true}
+
+  # ---- 100% lit ladder @ 100 uA (rerun of block 6) ----
+  # Measured lit -7 V current ~16 uA at 40 mV -> 16% of 100 uA. Positive-bias
+  # lit currents are smaller (thin but clean; big lit signals dominate).
+  - name: "sub-kHz 100% lit ladder RERUN (1-300 Hz, 100 uA, all lambda)"
+    type: c-f
+    bias: [-7, -4, -2, -1, 0, 1, 2, 4, 7]
+    current_range_a: 1.0e-4
+    oversampling: 10
+    settling_tcs: 20
+    device_settle_s: 20
+    freq: {start_hz: 1, stop_hz: 300, points_per_decade: 10}
+    illumination:
+      mode: matrix
+      wavelengths: [385, 470, 505, 530, 590, 625, 740, 850]
+      intensities: [100]
+      order: as-listed
+      dark_bracket: ends
+
+  # ---- C-V dispersion: fine bias resolution at 2 frequencies (block 7) ----
+  - name: "C-V dispersion (1 kHz / 100 Hz)"
+    type: c-v
+    frequencies: [1000, 100]
+    bias: {start_v: -7, stop_v: 7, points: 141}
+    illumination:
+      mode: matrix
+      dark_bracket: per-wavelength
+      wavelengths:
+        - {nm: 385, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 470, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 505, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 530, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 590, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 625, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 740, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 850, intensities: [1, 3, 10, 30, 100]}
+
+  # ---- QA anchor: end-of-campaign drift check (block 8) ----
+  - name: "QA anchor: dark @ +1 V (end-of-run drift check)"
+    type: c-f
+    bias: [1]
+    illumination: {dark_only: true}

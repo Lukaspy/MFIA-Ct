@@ -1,0 +1,87 @@
+# === FINAL campaign (2026-07-06 ~21:10): negative-bias suite + C-V + anchor ===
+# Runs on the ACCEPTED post-light-soak device state (Lukas: negative bias is the
+# conduction/ON side on this n-type substrate -- essential science; state verified
+# stable at +/-1 V over 7 h, deep-negative states partially recovered).
+# Pins sized from a live 30 mV probe at 21:0x:
+#   -1 V: 148 k / 21.7 kOhm   -2 V: 40 k / 22.6 kOhm
+#   -4 V: 28 k / 33 kOhm      -7 V: 5.5 k / 97 kOhm   (10 Hz / 1 kHz)
+#   worst dark current @30 mV = 5.4 uA -> 100 uA pin (18x headroom for state
+#   collapse); lit worst-known ~150-200 Ohm @40 mV -> ~270 uA -> 1 mA pin (5 MHz
+#   BW, flags reliable). Blocks 1-4 of the 10:50 campaign are already banked.
+device:
+  id: "2013-3"
+  substrate: "n-Si"
+  notes: "FINAL: negative sub-kHz + 100% lit ladder + C-V dispersion + end QA anchor, post-light-soak state"
+
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_completerun"
+
+defaults:
+  amplitude_mv_rms: 100
+  light_amplitude_mv_rms: 40
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 10
+  dark_settle_s: 10
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 1
+  current_range_a: auto
+  freq:
+    start_hz: 80
+    stop_hz: 500000
+    points_per_decade: 10
+
+blocks:
+  # ---- dark ladder, NEGATIVE biases @ 100 uA, 30 mV ----
+  - name: "sub-kHz dark ladder, negative bias FINAL (1-300 Hz, 100 uA, 30 mV)"
+    type: c-f
+    bias: [-1, -2, -4, -7]
+    amplitude_mv_rms: 30
+    current_range_a: 1.0e-4
+    oversampling: 10
+    settling_tcs: 20
+    device_settle_s: 30
+    freq: {start_hz: 1, stop_hz: 300, points_per_decade: 10}
+    illumination: {dark_only: true}
+
+  # ---- 100% lit ladder @ 1 mA, all wavelengths, all biases ----
+  # 1 mA pin: lit negative states reached ~150 Ohm during the first campaign
+  # (~270 uA at 40 mV) -> 27% FS with 3x margin below the pin even at 50 Ohm.
+  - name: "sub-kHz 100% lit ladder FINAL (1-300 Hz, 1 mA, all lambda)"
+    type: c-f
+    bias: [-7, -4, -2, -1, 0, 1, 2, 4, 7]
+    current_range_a: 1.0e-3
+    oversampling: 10
+    settling_tcs: 20
+    device_settle_s: 20
+    freq: {start_hz: 1, stop_hz: 300, points_per_decade: 10}
+    illumination:
+      mode: matrix
+      wavelengths: [385, 470, 505, 530, 590, 625, 740, 850]
+      intensities: [100]
+      order: as-listed
+      dark_bracket: ends
+
+  # ---- C-V dispersion: fine bias resolution at 2 frequencies ----
+  - name: "C-V dispersion (1 kHz / 100 Hz)"
+    type: c-v
+    frequencies: [1000, 100]
+    bias: {start_v: -7, stop_v: 7, points: 141}
+    illumination:
+      mode: matrix
+      dark_bracket: per-wavelength
+      wavelengths:
+        - {nm: 385, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 470, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 505, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 530, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 590, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 625, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 740, intensities: [1, 3, 10, 30, 100]}
+        - {nm: 850, intensities: [1, 3, 10, 30, 100]}
+
+  # ---- QA anchor: end-of-campaign drift check ----
+  - name: "QA anchor: dark @ +1 V (end-of-run drift check)"
+    type: c-f
+    bias: [1]
+    illumination: {dark_only: true}
