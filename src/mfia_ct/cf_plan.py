@@ -78,6 +78,11 @@ class _Defaults:
     # Demod samples averaged per point ("oversampling"). 1 = none. ZI's high-Z
     # recipe uses ~800-2000 to pull a few-pA signal out of the noise at low f.
     oversampling: int = 1
+    # Average over this many demod TCs per point (sweeper averaging/tc) — the
+    # REAL time-averaging knob. oversampling alone spans <1 ms of demod data,
+    # i.e. no averaging relative to a low-f signal period. ~10-20 on sub-kHz
+    # blocks gives 1/sqrt(N) noise reduction at linear time cost. 0 = off.
+    averaging_tcs: float = 0.0
     # Fixed current-input range in amps (e.g. 1.0e-7 for 100 nA); None / "auto"
     # = auto-range. Pin a sensitive range for high-Z / low-current sweeps.
     current_range_a: float | None = None
@@ -141,6 +146,7 @@ def _merge_defaults(base: _Defaults, raw: dict[str, Any]) -> _Defaults:
             raw.get("compensation_enabled", out.compensation_enabled)
         ),
         oversampling=max(1, int(raw.get("oversampling", out.oversampling))),
+        averaging_tcs=max(0.0, float(raw.get("averaging_tcs", out.averaging_tcs))),
         current_range_a=_parse_current_range(
             raw.get("current_range_a", out.current_range_a), out.current_range_a
         ),
@@ -159,7 +165,7 @@ def _block_defaults(base: _Defaults, block: dict[str, Any]) -> _Defaults:
         "amplitude_mv_rms", "light_amplitude_mv_rms", "terminal_mode",
         "equiv_circuit", "device_settle_s", "dark_settle_s", "settling_tcs",
         "auto_bandwidth", "compensation_enabled", "oversampling",
-        "current_range_a", "freq",
+        "averaging_tcs", "current_range_a", "freq",
     }
     inline = {k: block[k] for k in keys if k in block}
     return _merge_defaults(base, inline) if inline else base
@@ -344,6 +350,7 @@ def _block_to_config(
             settling_tcs=d.settling_tcs,
             auto_bandwidth=d.auto_bandwidth,
             averaging_samples=d.oversampling,
+            averaging_tc=d.averaging_tcs,
         )
         bias = BiasSequence(
             values_v=[float(b) for b in bias_vals], bias_settle_s=d.device_settle_s
@@ -378,6 +385,7 @@ def _block_to_config(
             settling_tcs=d.settling_tcs,
             auto_bandwidth=d.auto_bandwidth,
             averaging_samples=d.oversampling,
+            averaging_tc=d.averaging_tcs,
         )
         ia = _build_ia(d, cv_freqs[0])
         return CfConfig(
