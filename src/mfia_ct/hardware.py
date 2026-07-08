@@ -19,10 +19,15 @@ from .cf_config import BiasSweepSettings, CfConfig, SweeperSettings
 from .config import CtConfig, EquivCircuit, TerminalMode
 
 # Equivalent-circuit selectors as exposed by /dev/imps/N/model.
-# 0 = R+C series, 1 = R||C parallel. Match the LabOne IA tab.
+# Per the MFIA User Manual node reference (/dev/imps/n/model):
+#   0 = "r_c_parallel" (Rp || Cp), 1 = "r_c_series" (Rs + Cs).
+# NOTE 2026-07-07: this mapping was previously INVERTED (CP_RP -> 1), so the
+# continuous C-t stream (which reads param0/param1 directly) recorded the
+# SERIES model on real hardware. Swept C-f/C-V data was unaffected - it stores
+# raw z_real/z_imag and derives Cp/Rp itself, independent of this node.
 _EQUIV_CIRCUIT_NODE_VALUE = {
-    EquivCircuit.CP_RP: 1,
-    EquivCircuit.CS_RS: 0,
+    EquivCircuit.CP_RP: 0,
+    EquivCircuit.CS_RS: 1,
 }
 
 # Terminal-mode selector as exposed by /dev/imps/N/mode.
@@ -123,16 +128,22 @@ class MFIA:
             out_demod = int(self.daq.getInt(f"/{dev}/imps/{ia.imp_index}/output/demod"))
         except Exception:
             out_demod = 1
+        # OUTPUT RANGE must cover the DC bias + AC peak (auto-output sizes only
+        # to the AC amplitude and ignores the bias) - same reasoning as
+        # configure_impedance_for_cf. Without this a biased C-t stream runs on
+        # whatever range the previous block left and can over-range (OVO).
+        output_range = (abs(ia.dc_bias_v) + ia.ac_amplitude_v * math.sqrt(2.0)) * 1.05
+
         settings = [
             (f"/{dev}/imps/{ia.imp_index}/enable", 1),
             (f"/{dev}/imps/{ia.imp_index}/mode", _TERMINAL_MODE_NODE_VALUE[ia.terminal_mode]),
             (f"/{dev}/imps/{ia.imp_index}/auto/output", 0),
+            (f"/{dev}/sigouts/{ia.imp_index}/range", output_range),
             (f"/{dev}/imps/{ia.imp_index}/output/on", 1),  # IA test-signal ON
             # Route the output demod's amplitude to the physical output (cleared
             # by disable_everything; output/on alone does not restore it -> open).
             (f"/{dev}/sigouts/{ia.imp_index}/enables/{out_demod}", 1),
             (f"/{dev}/imps/{ia.imp_index}/auto/bw", 0),
-            (f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 0),
             (f"/{dev}/imps/{ia.imp_index}/freq", ia.frequency_hz),
             # /imps/N/output/amplitude is V PEAK (same output-stage quantity as
             # /sigouts/N/amplitudes/M, documented "peak amplitude"; output/range
@@ -149,8 +160,26 @@ class MFIA:
             (f"/{dev}/demods/{ia.imp_index}/order", cfg.demod.filter_order),
             (f"/{dev}/demods/{ia.imp_index}/timeconstant", cfg.demod.time_constant_s),
         ]
-        self.daq.set(settings)
-        self.daq.sync()
+        # CURRENT-INPUT RANGE: continuous streaming must not re-range mid-run
+        # (glitches/gaps), so the range ends up frozen either way - but frozen
+        # at a RELEVANT value. Pinned: write it directly. Auto: let autorange
+        # settle at the configured freq/bias/amplitude, then freeze. Previously
+        # auto/inputrange was forced to 0 without writing a range, streaming on
+        # whatever range the previous block happened to leave.
+        if ia.current_range_a is not None:
+            settings.append((f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 0))
+            settings.append(
+                (f"/{dev}/imps/{ia.imp_index}/current/range", float(ia.current_range_a))
+            )
+            self.daq.set(settings)
+            self.daq.sync()
+        else:
+            settings.append((f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 1))
+            self.daq.set(settings)
+            self.daq.sync()
+            time.sleep(1.5)  # let autorange settle at the operating point
+            self.daq.set([(f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 0)])
+            self.daq.sync()
 
     def configure_impedance_for_cf(self, cfg: CfConfig) -> None:
         """Configure the IA for frequency sweeping under the C-f campaign.
@@ -515,7 +544,14 @@ class MFIA:
             self._t_zero_ticks = int(ts[0])
         t = (ts - self._t_zero_ticks) / self._clockbase_cached
         cp = np.asarray(sample["param1"], dtype=float)
-        gp = np.asarray(sample["param0"], dtype=float)
+        # Under model 0 (r_c_parallel) param0 is Rp in OHMS (the manual and
+        # ZI's example_poll_impedance both label param0 "resistance"). The
+        # StreamChunk contract (and the mock) is a CONDUCTANCE gp in siemens,
+        # so convert. Previously param0 was passed through raw, mislabelling
+        # every stream sample as siemens on real hardware.
+        rp = np.asarray(sample["param0"], dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            gp = np.where(rp != 0.0, 1.0 / rp, np.nan)
 
         edges = self._detect_aux_in_edges(data)
         return StreamChunk(t=t, cp=cp, gp=gp, pulse_edges_s=edges)
