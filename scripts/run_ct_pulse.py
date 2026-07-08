@@ -160,6 +160,20 @@ def main() -> int:
 
     log("configuring impedance analyzer ...")
     backend.configure_impedance(cfg)
+    # The IA impedance stream rate lives on imps/N/demod/rate, NOT on
+    # demods/N/rate (which configure_impedance sets) — without this the
+    # stream stays pinned at the instrument default (~13.4 kSa/s) no matter
+    # what sample-rate is asked for. Write it directly; read back the
+    # granted rate (LabOne quantizes).
+    if not args.mock and hasattr(backend, "daq"):
+        node = f"/{backend.device}/imps/0/demod/rate"
+        try:
+            backend.daq.set([(node, args.sample_rate)])
+            backend.daq.sync()
+            granted = backend.daq.getDouble(node)
+            log(f"stream rate: asked {args.sample_rate:g}, granted {granted:g} Sa/s")
+        except Exception as e:
+            log(f"imps demod rate node not writable ({e}); stream at default")
 
     # ---- schedule (stream time base = seconds since start_continuous) ----
     on_edges = [args.baseline_s + i * (args.on_s + args.off_s)
