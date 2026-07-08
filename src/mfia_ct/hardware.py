@@ -151,8 +151,6 @@ class MFIA:
             # convert RMS->peak here exactly as configure_impedance_for_cf and
             # set_amplitude do. Writing it raw under-drove the test signal by √2.
             (f"/{dev}/imps/{ia.imp_index}/output/amplitude", ia.ac_amplitude_v * math.sqrt(2.0)),
-            (f"/{dev}/imps/{ia.imp_index}/bias/value", ia.dc_bias_v),
-            (f"/{dev}/imps/{ia.imp_index}/bias/enable", 1 if ia.dc_bias_v != 0 else 0),
             (f"/{dev}/imps/{ia.imp_index}/model", model),
             (f"/{dev}/imps/{ia.imp_index}/calib/user/enable",
              1 if ia.compensation_enabled else 0),  # own comp state explicitly
@@ -172,12 +170,40 @@ class MFIA:
                 (f"/{dev}/imps/{ia.imp_index}/current/range", float(ia.current_range_a))
             )
             self.daq.set(settings)
-            self.daq.sync()
         else:
             settings.append((f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 1))
             self.daq.set(settings)
+        self.daq.sync()
+
+        # DC BIAS IN ITS OWN WRITE, AFTER the module reconfig (2026-07-08): the
+        # IA re-apply cycle triggered by the enable/output/freq writes in the
+        # same set() batch STOMPS a concurrent bias write with the module's
+        # prior state (verified on dev32369: bias/value silently reverted, so
+        # C-t streams ran UNBIASED at 0 V while reporting the commanded bias in
+        # metadata). The C-f path dodges the race because the campaign re-writes
+        # bias per bias-step; here there is no later write, so apply the bias
+        # separately after the batch settles and VERIFY by read-back.
+        time.sleep(0.2)
+        bias_value_path = f"/{dev}/imps/{ia.imp_index}/bias/value"
+        for _attempt in range(2):
+            self.daq.set([
+                (bias_value_path, ia.dc_bias_v),
+                (f"/{dev}/imps/{ia.imp_index}/bias/enable",
+                 1 if ia.dc_bias_v != 0 else 0),
+            ])
             self.daq.sync()
-            time.sleep(1.5)  # let autorange settle at the operating point
+            time.sleep(0.2)
+            if abs(self.daq.getDouble(bias_value_path) - ia.dc_bias_v) < 1e-3:
+                break
+        else:
+            raise RuntimeError(
+                f"DC bias write did not stick: {bias_value_path} reads "
+                f"{self.daq.getDouble(bias_value_path):.3f} V, wanted "
+                f"{ia.dc_bias_v:.3f} V (IA re-apply race)."
+            )
+
+        if ia.current_range_a is None:
+            time.sleep(1.5)  # let autorange settle at the TRUE operating point
             self.daq.set([(f"/{dev}/imps/{ia.imp_index}/auto/inputrange", 0)])
             self.daq.sync()
 
