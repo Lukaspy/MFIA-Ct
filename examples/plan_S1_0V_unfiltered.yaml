@@ -1,0 +1,41 @@
+# === S1 (unfiltered half) — Definitive 0 V dark spectrum, wideband ===
+# HARDWARE: filter OUT (direct/barrel). Anchor brackets the half-ladder.
+# Comp: run LabOne open/short >1 kHz at session start; grid+anchor blocks comp ON,
+# 340-3k block comp OFF (raw — matches the filtered bands it seams with at 340 Hz).
+device: {id: "2013-3", substrate: "n-Si", notes: "S1 definitive 0V dark - wideband"}
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_S1_0V"
+defaults:
+  amplitude_mv_rms: 30
+  light_amplitude_mv_rms: 30
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 10
+  dark_settle_s: 10
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 10
+  averaging_tcs: 15
+  compensation_enabled: true
+  current_range_a: auto
+  freq: {start_hz: 1000, stop_hz: 500000, points_per_decade: 10}
+blocks:
+  - name: "S1U anchor (1 k-500 kHz, auto, comp ON)"
+    type: c-f
+    bias: [0]
+    illumination: {dark_only: true}
+  - name: "S1U grid band 3.4 k-500 kHz (auto, comp ON)"
+    type: c-f
+    bias: [0]
+    freq: {start_hz: 3400, stop_hz: 500000, points_per_decade: 10}
+    illumination: {dark_only: true}
+  - name: "S1U 340-3400 Hz (10 uA, comp OFF, mains-offset)"
+    type: c-f
+    bias: [0]
+    current_range_a: 1.0e-5
+    compensation_enabled: false
+    freq: {start_hz: 340, stop_hz: 3400, points_per_decade: 10}
+    illumination: {dark_only: true}
+  - name: "S1U anchor repeat (1 k-500 kHz)"
+    type: c-f
+    bias: [0]
+    illumination: {dark_only: true}

@@ -1,0 +1,31 @@
+# === S2a (unfiltered half) — positive dark bias ladder, 340 Hz-500 kHz ===
+device: {id: "2013-3", substrate: "n-Si", notes: "S2a positive rungs - wideband"}
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_S2a_pos"
+defaults:
+  amplitude_mv_rms: 30
+  light_amplitude_mv_rms: 30
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 300
+  dark_settle_s: 10
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 10
+  averaging_tcs: 15
+  compensation_enabled: true
+  current_range_a: auto
+  freq: {start_hz: 1000, stop_hz: 500000, points_per_decade: 10}
+blocks:
+  - name: "S2aU anchor (1 k-500 kHz, 0 V)"
+    type: c-f
+    bias: [0]
+    illumination: {dark_only: true}
+  - name: "S2aU rungs 340 Hz-500 kHz (auto; 340-3.4k comp caveat in analysis)"
+    type: c-f
+    bias: [1, 2, 4, 7, 2, 1]
+    freq: {start_hz: 340, stop_hz: 500000, points_per_decade: 10}
+    illumination: {dark_only: true}
+  - name: "S2aU anchor repeat (1 k-500 kHz, 0 V)"
+    type: c-f
+    bias: [0]
+    illumination: {dark_only: true}
