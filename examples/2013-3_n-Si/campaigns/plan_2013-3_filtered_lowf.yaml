@@ -1,0 +1,98 @@
+# === FILTERED LOW-FREQUENCY SESSION — 2013-3 (n-Si), LCUR pi filter installed ===
+#
+# HARDWARE STATE (required): pi filter in LCUR line (R=9906 ohm + 2x9.9 nF,
+# characterized 2026-07-09; cal/CAL_* files). Faraday box on, chuck braided to
+# LCUR triax shield. Filter rules: dark / dim-lit ONLY (|Z|>~100 kOhm, I<~100 nA).
+#
+# CALIBRATION: compensation OFF everywhere (raw Z; LabOne comp would extrapolate
+# and is invalid through the filter). De-embed offline: Z_dev = Z_raw - 9906 ohm
+# (series R; C-bypass <0.1% in-band on these ranges; open stray 0.3 pF negligible).
+#
+# Segmented pins sized for the 2026-07-09 landed state (0 V: 1.5 MOhm @10 Hz,
+# ~10 nF low-f): 10 nA pin only below 3 Hz, 100 nA to 30 Hz, 1 uA above.
+# Noise floor verified landed: 100 nA range 23% FS pk, 10 nA range 2.2% FS pk.
+
+device:
+  id: "2013-3"
+  substrate: "n-Si"
+  notes: "Filtered low-f session: fine pins + real averaging + genuinely dark"
+
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_filtered_lowf"
+
+defaults:
+  amplitude_mv_rms: 30          # B1500 convention, uniform
+  light_amplitude_mv_rms: 30
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 15
+  dark_settle_s: 10
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 10
+  averaging_tcs: 15             # REAL averaging (sweeper averaging/tc)
+  compensation_enabled: false   # raw Z; filter de-embedded offline
+  current_range_a: 1.0e-6
+  freq:
+    start_hz: 30
+    stop_hz: 300
+    points_per_decade: 10
+
+blocks:
+  # ---- segment 3 first: fastest sweep, doubles as state documentation ----
+  - name: "dark ladder 30-300 Hz (1 uA)"
+    type: c-f
+    bias: [0, 1, 2, 4, 7, -1, -2, -4, -7]
+    current_range_a: 1.0e-6
+    freq: {start_hz: 30, stop_hz: 300, points_per_decade: 10}
+    illumination: {dark_only: true}
+
+  # ---- segment 2: the 100 nA pin's first production data ----
+  - name: "dark ladder 3-30 Hz (100 nA)"
+    type: c-f
+    bias: [0, 1, 2, 4, 7, -1, -2, -4, -7]
+    current_range_a: 1.0e-7
+    freq: {start_hz: 3, stop_hz: 30, points_per_decade: 10}
+    illumination: {dark_only: true}
+
+  # ---- segment 1: the crown jewels — 10 nA pin, 1-3 Hz ----
+  - name: "dark ladder 1-3 Hz (10 nA)"
+    type: c-f
+    bias: [0, 1, 2, 4, 7, -1, -2, -4, -7]
+    current_range_a: 1.0e-8
+    settling_tcs: 20
+    averaging_tcs: 20
+    freq: {start_hz: 1, stop_hz: 3, points_per_decade: 8}
+    illumination: {dark_only: true}
+
+  # ---- sub-1 Hz taster: territory no instrument on this device has seen ----
+  - name: "sub-Hz taster 0.3-1 Hz (10 nA, 0 and +1 V)"
+    type: c-f
+    bias: [0, 1]
+    current_range_a: 1.0e-8
+    settling_tcs: 20
+    averaging_tcs: 25
+    device_settle_s: 20
+    freq: {start_hz: 0.3, stop_hz: 1, points_per_decade: 8}
+    illumination: {dark_only: true}
+
+  # ---- dim-lit tail: photoresponse onset through the filter (needs PXI on) ----
+  - name: "dim-lit 0 V tail 1-30 Hz (100 nA, 1-3%)"
+    type: c-f
+    bias: [0]
+    current_range_a: 1.0e-7
+    freq: {start_hz: 1, stop_hz: 30, points_per_decade: 8}
+    illumination:
+      mode: matrix
+      dark_bracket: per-wavelength
+      wavelengths:
+        - {nm: 470, intensities: [1, 3]}
+        - {nm: 625, intensities: [1, 3]}
+        - {nm: 740, intensities: [1, 3]}
+
+  # ---- end anchor: repeat segment 2 at 0/+1 V to bracket session drift ----
+  - name: "anchor: dark 3-30 Hz repeat (100 nA, 0 and +1 V)"
+    type: c-f
+    bias: [0, 1]
+    current_range_a: 1.0e-7
+    freq: {start_hz: 3, stop_hz: 30, points_per_decade: 10}
+    illumination: {dark_only: true}
