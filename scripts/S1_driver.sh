@@ -11,8 +11,8 @@
 set -u
 PY=.venv/bin/python
 RUN="$PY scripts/run_plan_headless.py"
-U=examples/plan_S1_0V_unfiltered.yaml
-F=examples/plan_S1_0V_filtered.yaml
+U=examples/2013-3_n-Si/publication/plan_S1_0V_unfiltered.yaml
+F=examples/2013-3_n-Si/publication/plan_S1_0V_filtered.yaml
 log(){ echo "[$(date +%H:%M:%S)] $*"; }
 wait_swap(){
   rm -f /tmp/mfia_swap_done
