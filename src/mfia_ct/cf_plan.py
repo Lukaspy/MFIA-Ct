@@ -83,6 +83,8 @@ class _Defaults:
     # i.e. no averaging relative to a low-f signal period. ~10-20 on sub-kHz
     # blocks gives 1/sqrt(N) noise reduction at linear time cost. 0 = off.
     averaging_tcs: float = 0.0
+    # Reed switcher: "in"/"out"/None. None = don't touch (manual hardware).
+    filter_state: str | None = None
     # Fixed current-input range in amps (e.g. 1.0e-7 for 100 nA); None / "auto"
     # = auto-range. Pin a sensitive range for high-Z / low-current sweeps.
     current_range_a: float | None = None
@@ -147,6 +149,8 @@ def _merge_defaults(base: _Defaults, raw: dict[str, Any]) -> _Defaults:
         ),
         oversampling=max(1, int(raw.get("oversampling", out.oversampling))),
         averaging_tcs=max(0.0, float(raw.get("averaging_tcs", out.averaging_tcs))),
+        filter_state=(str(raw["filter_state"]).lower()
+                      if raw.get("filter_state") is not None else out.filter_state),
         current_range_a=_parse_current_range(
             raw.get("current_range_a", out.current_range_a), out.current_range_a
         ),
@@ -165,7 +169,7 @@ def _block_defaults(base: _Defaults, block: dict[str, Any]) -> _Defaults:
         "amplitude_mv_rms", "light_amplitude_mv_rms", "terminal_mode",
         "equiv_circuit", "device_settle_s", "dark_settle_s", "settling_tcs",
         "auto_bandwidth", "compensation_enabled", "oversampling",
-        "averaging_tcs", "current_range_a", "freq",
+        "averaging_tcs", "filter_state", "current_range_a", "freq",
     }
     inline = {k: block[k] for k in keys if k in block}
     return _merge_defaults(base, inline) if inline else base
@@ -330,11 +334,14 @@ def _block_to_config(
     d = _block_defaults(base, block)
     typ = str(block.get("type", "")).lower()
     illum = _expand_illumination(block.get("illumination", {}), d)
+    if d.filter_state is not None and d.filter_state not in ("in", "out"):
+        raise PlanError("filter_state must be 'in', 'out', or omitted.")
     run = RunMetadata(
         device_id=str(device.get("id", "")),
         substrate_type=str(device.get("substrate", "")),
         notes=str(device.get("notes", "")),
         output_dir=output_dir,
+        filter_state=d.filter_state,
     )
 
     if typ in ("c-f", "cf"):

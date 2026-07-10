@@ -5,6 +5,7 @@
 device: {id: "2013-3", substrate: "n-Si", notes: "S1 definitive 0V dark - wideband"}
 output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_S1_0V"
 defaults:
+  filter_state: "out"          # reed switcher (aux-driven); remove if manual hardware
   amplitude_mv_rms: 30
   light_amplitude_mv_rms: 30
   terminal_mode: 2-terminal

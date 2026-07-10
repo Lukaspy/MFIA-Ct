@@ -376,6 +376,9 @@ class RunMetadata:
     substrate_type: str = ""  # "p-Si", "n-Si", "nitride", etc.
     notes: str = ""
     output_dir: str = ""  # destination folder for CSVs
+    # Reed switcher state for this block: "in" (pi filter) / "out" (bypass)
+    # / None (no switcher control — manual hardware). Driven via MFIA Aux Outs.
+    filter_state: str | None = None
 
 
 @dataclass

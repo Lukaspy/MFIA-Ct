@@ -73,6 +73,38 @@ def contact_ok(mfia) -> bool:
     return z < 10_000.0
 
 
+# --- Reed filter switcher (JWS-117-10 trio, driven via MFIA Aux Outs) -------
+# Aux 0 gate -> RD (bypass reed). Aux 1 gate -> RF1+RF2 (filter reeds).
+# "out" = bypass energized (filter fully lifted). "in" = filter reeds energized.
+# Break-before-make; reed operate ~1.5 ms, we allow 500 ms. Only called between
+# blocks, never mid-sweep.
+AUX_BYPASS = 0
+AUX_FILTER = 1
+_GATE_ON_V = 10.0
+
+
+def set_filter_state(backend, state, log_fn):
+    daq = backend.daq
+    dev = backend.device
+
+    def aux(ch, volts):
+        daq.set([
+            (f"/{dev}/auxouts/{ch}/outputselect", -1),   # manual mode
+            (f"/{dev}/auxouts/{ch}/offset", float(volts)),
+        ])
+
+    aux(AUX_BYPASS, 0.0); aux(AUX_FILTER, 0.0)
+    daq.sync(); time.sleep(0.25)
+    if state == "out":
+        aux(AUX_BYPASS, _GATE_ON_V)
+    elif state == "in":
+        aux(AUX_FILTER, _GATE_ON_V)
+    else:
+        raise ValueError(f"bad filter_state {state!r}")
+    daq.sync(); time.sleep(0.5)
+    log_fn(f"    switcher: filter {state.upper()}")
+
+
 def connect_backend(args):
     """Open the selected analyzer and return it, or exit on a failed pre-check."""
     if args.instrument == "b1500":
@@ -134,6 +166,9 @@ def main() -> None:
                 axis = f"bias={cfg.bias.values_v}"
             log(f"--- block {i + 1}/{len(configs)}  [{st}] {axis} ---")
             out_dir = Path(cfg.run.output_dir); out_dir.mkdir(parents=True, exist_ok=True)
+            fs = getattr(cfg.run, "filter_state", None)
+            if fs is not None and args.instrument == "mfia":
+                set_filter_state(backend, fs, log)
             led = PxiLedSource(bitfile=args.bitfile, resource=args.led_resource, use_cal=True)
             try:
                 for result in CfExperiment(backend, cfg, led=led).run():
