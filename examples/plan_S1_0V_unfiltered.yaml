@@ -28,10 +28,14 @@ blocks:
     bias: [0]
     freq: {start_hz: 3400, stop_hz: 500000, points_per_decade: 10}
     illumination: {dark_only: true}
-  - name: "S1U 340-3400 Hz (10 uA, comp OFF, mains-offset)"
+  # 2026-07-10 smoke finding: pinned 10 uA ran 3-6% FS (thin) and 15 TCs is
+  # only ~0.1 s/pt up here -> scatter + a 428 Hz outlier (420 mains harmonic
+  # inside the wide demod band). Fix: auto range + heavy averaging.
+  - name: "S1U 340-3400 Hz (auto, comp OFF, mains-offset, heavy avg)"
     type: c-f
     bias: [0]
-    current_range_a: 1.0e-5
+    current_range_a: auto
+    averaging_tcs: 100
     compensation_enabled: false
     freq: {start_hz: 340, stop_hz: 3400, points_per_decade: 10}
     illumination: {dark_only: true}
