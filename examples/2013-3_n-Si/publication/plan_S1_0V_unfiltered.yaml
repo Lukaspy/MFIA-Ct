@@ -1,7 +1,10 @@
 # === S1 (unfiltered half) — Definitive 0 V dark spectrum, wideband ===
 # HARDWARE: filter OUT (direct/barrel). Anchor brackets the half-ladder.
-# Comp: run LabOne open/short >1 kHz at session start; grid+anchor blocks comp ON,
-# 340-3k block comp OFF (raw — matches the filtered bands it seams with at 340 Hz).
+# COMP DECISION 2026-07-10: ALL blocks run RAW (comp OFF). The stored Jul-2 comp
+# predates the reed switcher (its ~1.5 uH / 40 mOhm bypass path) and would apply a
+# WRONG correction. Fresh open/short standards are measured AFTER the session
+# (probes lift then anyway) and applied OFFLINE (open-short post-correction in the
+# analysis pipeline, same pattern as the pi-filter de-embed).
 device: {id: "2013-3", substrate: "n-Si", notes: "S1 definitive 0V dark - wideband"}
 output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_S1_0V"
 defaults:
@@ -16,15 +19,15 @@ defaults:
   auto_bandwidth: true
   oversampling: 10
   averaging_tcs: 15
-  compensation_enabled: true
+  compensation_enabled: false
   current_range_a: auto
   freq: {start_hz: 1000, stop_hz: 500000, points_per_decade: 10}
 blocks:
-  - name: "S1U anchor (1 k-500 kHz, auto, comp ON)"
+  - name: "S1U anchor (1 k-500 kHz, auto, RAW)"
     type: c-f
     bias: [0]
     illumination: {dark_only: true}
-  - name: "S1U grid band 3.4 k-500 kHz (auto, comp ON)"
+  - name: "S1U grid band 3.4 k-500 kHz (auto, RAW)"
     type: c-f
     bias: [0]
     freq: {start_hz: 3400, stop_hz: 500000, points_per_decade: 10}
@@ -40,7 +43,7 @@ blocks:
     compensation_enabled: false
     freq: {start_hz: 340, stop_hz: 3400, points_per_decade: 10}
     illumination: {dark_only: true}
-  - name: "S1U anchor repeat (1 k-500 kHz)"
+  - name: "S1U anchor repeat (1 k-500 kHz, RAW)"
     type: c-f
     bias: [0]
     illumination: {dark_only: true}
