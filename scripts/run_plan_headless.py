@@ -74,12 +74,13 @@ def contact_ok(mfia) -> bool:
 
 
 # --- Reed filter switcher (JWS-117-10 trio, driven via MFIA Aux Outs) -------
-# Aux 0 gate -> RD (bypass reed). Aux 1 gate -> RF1+RF2 (filter reeds).
+# AS-BUILT WIRING (2026-07-10): panel Aux Out 1 (index 0) -> RF1+RF2 (filter
+# reeds); panel Aux Out 2 (index 1) -> RD (bypass reed).
 # "out" = bypass energized (filter fully lifted). "in" = filter reeds energized.
 # Break-before-make; reed operate ~1.5 ms, we allow 500 ms. Only called between
 # blocks, never mid-sweep.
-AUX_BYPASS = 0
-AUX_FILTER = 1
+AUX_BYPASS = 1
+AUX_FILTER = 0
 _GATE_ON_V = 10.0
 
 
