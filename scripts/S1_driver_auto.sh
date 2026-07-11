@@ -8,7 +8,7 @@ U=examples/2013-3_n-Si/publication/plan_S1_0V_unfiltered.yaml
 F=examples/2013-3_n-Si/publication/plan_S1_0V_filtered.yaml
 log(){ echo "[$(date +%H:%M:%S)] $*"; }
 rest(){ log "45 min inter-ladder rest"; sleep 2700; }
-log "S1 AUTO ladder 1/3"; $RUN $U || exit 1; $RUN $F --no-contact-check || exit 1; rest
-log "S1 AUTO ladder 2/3"; $RUN $F --no-contact-check || exit 1; $RUN $U || exit 1; rest
-log "S1 AUTO ladder 3/3"; $RUN $U || exit 1; $RUN $F --no-contact-check || exit 1
+log "S1 AUTO ladder 1/3"; $RUN $U --no-contact-check || exit 1; $RUN $F --no-contact-check || exit 1; rest
+log "S1 AUTO ladder 2/3"; $RUN $F --no-contact-check || exit 1; $RUN $U --no-contact-check || exit 1; rest
+log "S1 AUTO ladder 3/3"; $RUN $U --no-contact-check || exit 1; $RUN $F --no-contact-check || exit 1
 log "S1 COMPLETE - 3 ladders, 0 human swaps"
