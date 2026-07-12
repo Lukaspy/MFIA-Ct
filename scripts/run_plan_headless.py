@@ -82,9 +82,15 @@ def contact_ok(mfia) -> bool:
 AUX_BYPASS = 1
 AUX_FILTER = 0
 _GATE_ON_V = 10.0
+_last_filter_state = [None]   # cache: skip no-op toggles (a toggle floats the
+                              # LCUR line ~0.5 s -> bias-perturbs the DUT, which
+                              # then fluctuates for minutes; diagnosed 2026-07-12)
 
 
 def set_filter_state(backend, state, log_fn):
+    if state == _last_filter_state[0]:
+        log_fn(f"    switcher: filter {state.upper()} (already set - no toggle)")
+        return
     daq = backend.daq
     dev = backend.device
 
@@ -94,16 +100,20 @@ def set_filter_state(backend, state, log_fn):
             (f"/{dev}/auxouts/{ch}/offset", float(volts)),
         ])
 
-    aux(AUX_BYPASS, 0.0); aux(AUX_FILTER, 0.0)
-    daq.sync(); time.sleep(0.25)
+    # MAKE-BEFORE-BREAK: close the target path first, then open the old one.
+    # Momentary both-closed = filter shorted by bypass (harmless, signal stays
+    # connected); the DUT low terminal NEVER floats.
     if state == "out":
-        aux(AUX_BYPASS, _GATE_ON_V)
+        aux(AUX_BYPASS, _GATE_ON_V); daq.sync(); time.sleep(0.5)
+        aux(AUX_FILTER, 0.0)
     elif state == "in":
-        aux(AUX_FILTER, _GATE_ON_V)
+        aux(AUX_FILTER, _GATE_ON_V); daq.sync(); time.sleep(0.5)
+        aux(AUX_BYPASS, 0.0)
     else:
         raise ValueError(f"bad filter_state {state!r}")
     daq.sync(); time.sleep(0.5)
-    log_fn(f"    switcher: filter {state.upper()}")
+    _last_filter_state[0] = state
+    log_fn(f"    switcher: filter {state.upper()} (make-before-break)")
 
 
 def connect_backend(args):
