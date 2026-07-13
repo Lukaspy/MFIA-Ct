@@ -29,6 +29,17 @@ class _FakeDaq:
     def getInt(self, node) -> int:
         return 1  # e.g. imps/0/output/demod -> 1 (the IA output demod)
 
+    def getDouble(self, node) -> float:
+        # return last written value (set_dc_bias ramps FROM this — a stuck 0.0
+        # made every ramp start from scratch and sleep for minutes)
+        return float(self.settings.get(node, 0.0))
+
+    def setInt(self, node, val) -> None:
+        self.settings[node] = val
+
+    def setDouble(self, node, val) -> None:
+        self.settings[node] = val
+
     def sync(self) -> None:
         pass
 
@@ -43,7 +54,7 @@ def _configure(cfg) -> dict:
 
 def test_cf_output_range_covers_bias_and_amp() -> None:
     """A -2 V C-f block must size the output range to >= |bias| + AC peak."""
-    cfgs = load_plan(EXAMPLES / "plan_2013-3_test.yaml")
+    cfgs = load_plan(EXAMPLES / "2013-3_n-Si" / "archive" / "plan_2013-3_test.yaml")
     biased = next(c for c in cfgs if -2.0 in c.bias.values_v)
     s = _configure(biased)
 
@@ -56,7 +67,7 @@ def test_cf_output_range_covers_bias_and_amp() -> None:
 def test_configure_enables_the_signal_output() -> None:
     """The test-signal output must be turned ON — else every sweep reads GΩ open.
     imps/output/on is the IA "Test Signal" toggle; sigouts/on is the raw stage."""
-    cfgs = load_plan(EXAMPLES / "plan_2013-3_test.yaml")
+    cfgs = load_plan(EXAMPLES / "2013-3_n-Si" / "archive" / "plan_2013-3_test.yaml")
     s = _configure(cfgs[0])
     assert s[f"/{DEV}/imps/0/output/on"] == 1
     # ...and the output demod's amplitude must be ROUTED to the output, else the
@@ -84,7 +95,7 @@ def test_configure_owns_compensation_state() -> None:
 
 def test_cf_output_range_uses_block_worst_case_bias() -> None:
     """A bias-ladder block sizes to the largest |bias| it will visit (±4 V)."""
-    cfgs = load_plan(EXAMPLES / "plan_2013-3_n-Si.yaml")
+    cfgs = load_plan(EXAMPLES / "2013-3_n-Si" / "campaigns" / "plan_2013-3_n-Si.yaml")
     ladder = next(c for c in cfgs if c.sweep_type.name == "C_F" and 4.0 in c.bias.values_v)
     s = _configure(ladder)
     amp_pk = ladder.ia.ac_amplitude_v * math.sqrt(2.0)
@@ -93,7 +104,7 @@ def test_cf_output_range_uses_block_worst_case_bias() -> None:
 
 def test_cv_output_range_covers_swept_bias_span() -> None:
     """A C-V block sizes to the extreme of its swept bias range."""
-    cfgs = load_plan(EXAMPLES / "plan_2013-3_n-Si.yaml")
+    cfgs = load_plan(EXAMPLES / "2013-3_n-Si" / "campaigns" / "plan_2013-3_n-Si.yaml")
     cv = next(c for c in cfgs if c.sweep_type.name == "C_V")
     s = _configure(cv)
     span = max(abs(cv.cv_bias.start_v), abs(cv.cv_bias.stop_v))

@@ -9,7 +9,7 @@ from mfia_ct.cf_config import SweepType
 from mfia_ct.cf_plan import PlanError, load_plan, parse_plan
 from mfia_ct.config import EquivCircuit, TerminalMode
 
-EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "plan_blocks_A-E.yaml"
+EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "generic" / "plan_blocks_A-E.yaml"
 
 
 def _lit(cfg):
@@ -207,7 +207,7 @@ def test_current_range_default_auto_and_override() -> None:
 
 
 def test_example_plans_load() -> None:
-    for name in ("plan_2013-3_n-Si.yaml", "plan_2013-3_test.yaml"):
+    for name in ("2013-3_n-Si/campaigns/plan_2013-3_n-Si.yaml", "2013-3_n-Si/archive/plan_2013-3_test.yaml"):
         p = EXAMPLE.parent / name
         if p.exists():
             configs = load_plan(p)
