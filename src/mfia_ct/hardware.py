@@ -295,15 +295,27 @@ class MFIA:
         self.daq.sync()
 
     def set_dc_bias(self, bias_v: float) -> None:
-        """Update the IA DC bias mid-campaign; bias output stays enabled."""
+        """Update the IA DC bias mid-campaign; bias output stays enabled.
+
+        RAMPED, not stepped (2026-07-13): hard bias steps fire the device's
+        transient conduction collapse (kOhm-class, ~2 min relaxation — see lab
+        notebook 2026-07-09). Ramp profile 0.5 V / 250 ms matches the validated
+        probe scripts, whose post-step states measured clean.
+        """
         if self.daq is None:
             raise RuntimeError("MFIA.connect() must be called first")
-        self.daq.set(
-            [
-                (f"/{self.device}/imps/0/bias/value", bias_v),
-                (f"/{self.device}/imps/0/bias/enable", 1),
-            ]
-        )
+        import time as _time
+        current = self.daq.getDouble(f"/{self.device}/imps/0/bias/value")
+        self.daq.setInt(f"/{self.device}/imps/0/bias/enable", 1)
+        delta = bias_v - current
+        n = max(1, int(abs(delta) / 0.5 + 0.5))
+        for i in range(1, n + 1):
+            self.daq.set(
+                [(f"/{self.device}/imps/0/bias/value", current + delta * i / n)]
+            )
+            self.daq.sync()
+            if i < n:
+                _time.sleep(0.25)
         self.daq.sync()
 
     def set_amplitude(self, v_rms: float) -> None:
