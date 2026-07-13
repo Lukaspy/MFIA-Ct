@@ -13,6 +13,27 @@ def rd(fn):
             if line.startswith('#'): continue
             return list(csv.DictReader([line]+fh.read().splitlines()))
 
+ZIN_FS = {1.0e-2:1e-2,1.0e-3:1e-3,1.0e-4:1e-4,1.0e-5:1e-5,
+          1.0e-6:1e-6,1.0e-7:1e-7,1.0e-8:1e-8,1.0e-9:1e-9}
+
+def screens(rows, pin_a, amp_vrms=0.030):
+    """Audit screens (added 2026-07-12 after the S1/D1 analysis audit —
+    roughness alone is blind to smooth-but-wrong):
+    passivity, band-top-capacitive, PEAK-current headroom, stuck samples."""
+    out=[]
+    ph=[float(r['phase_deg']) for r in rows]
+    if max(ph)>0.5: out.append(f"NON-PASSIVE: phase max {max(ph):+.1f} deg")
+    if min(ph)<-95: out.append(f"NONPHYSICAL: phase min {min(ph):+.1f} deg")
+    if ph[-1]>-15: out.append(f"BAND-TOP NOT CAPACITIVE: {ph[-1]:+.1f} deg")
+    if pin_a:
+        ipk=[2**0.5*amp_vrms/float(r['z_mag_ohm']) for r in rows]
+        worst=max(ipk)/pin_a*100
+        if worst>70: out.append(f"HEADROOM: I_pk worst {worst:.0f}% FS (rule <70%)")
+    v=[float(r['z_mag_ohm']) for r in rows]
+    stuck=sum(1 for i in range(1,len(v)) if v[i]==v[i-1])
+    if stuck: out.append(f"STUCK SAMPLES: {stuck}")
+    return out
+
 def rough(rows):
     """RMS % deviation from local log-log quadratic (the plan's §3 metric),
     approximated by median geometric-neighbor residual on |Z|."""
@@ -39,9 +60,19 @@ gates=[]
 for (lo,hi,de),(fn,rows) in sorted(bands.items()):
     r=rough(rows)
     lim = 10.0 if hi<=34 else (5.0 if hi<=1100 else 2.0)
-    ok = r<=lim
+    # pin from header for headroom screen
+    pin=None
+    with open(fn) as fh:
+        for line in fh:
+            if line.startswith('# current_range_a:'):
+                val=line.split(':',1)[1].strip()
+                pin=None if val=='auto' else float(val)
+            if not line.startswith('#'): break
+    sc=screens(rows,pin)
+    ok = r<=lim and not sc
     gates.append(ok)
-    print(f"{lo:8g}-{hi:8g} {'deemb' if de else 'raw':>6s} {r:10.2f} {'PASS' if ok else 'FAIL':>6s} {len(rows):4d}")
+    flag=('  << '+'; '.join(sc)) if sc else ''
+    print(f"{lo:8g}-{hi:8g} {'deemb' if de else 'raw':>6s} {r:10.2f} {'PASS' if ok else 'FAIL':>6s} {len(rows):4d}{flag}")
 
 # seam continuity at shared endpoints (use de-embedded for filtered bands)
 print()
