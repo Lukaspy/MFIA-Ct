@@ -1,0 +1,39 @@
+# ⚠ DRAFT FOR 2013-4 (nitride) — derived from 2013-3 plans 2026-07-13.
+# BEFORE FIRST USE: run landing_scout.py on this device; verify per-rung
+# pins (I_pk<70% FS) and polarity settle assignments (which side is drifty
+# is DEVICE-SPECIFIC — do not assume n-Si behavior). Adjust, then remove
+# this banner.
+# === S2b (unfiltered half) — negative dark bias ladder, 340 Hz-500 kHz ===
+device: {id: "2013-4", substrate: "nitride", notes: "S2b negative rungs - wideband"}
+# COMP: ALL RAW (stored Jul-2 comp invalid for switcher-era chain; proven
+# 2026-07-10: negative Re through bypass). Post-hoc open/short applied offline.
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-4_nitride_S2b_pos"
+defaults:
+  filter_state: "out"     # reed switcher (MISSING during 2026-07-12 S2a run — root cause of that session's loss)
+  amplitude_mv_rms: 30
+  light_amplitude_mv_rms: 30
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 1800
+  dark_settle_s: 10
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 10
+  averaging_tcs: 15
+  compensation_enabled: false
+  current_range_a: auto
+  freq: {start_hz: 1000, stop_hz: 500000, points_per_decade: 10}
+blocks:
+  - name: "S2bU anchor (1 k-500 kHz, 0 V)"
+    type: c-f
+    bias: [0]
+    illumination: {dark_only: true}
+  - name: "S2bU rungs 340 Hz-500 kHz (auto; 340-3.4k comp caveat in analysis)"
+    type: c-f
+    bias: [-1, -2, -4, -7, -2, -1]
+    freq: {start_hz: 340, stop_hz: 500000, points_per_decade: 10}
+    illumination: {dark_only: true}
+  - name: "S2bU anchor repeat (1 k-500 kHz, 0 V)"
+    type: c-f
+    bias: [0]
+    illumination: {dark_only: true}

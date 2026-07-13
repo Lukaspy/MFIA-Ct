@@ -1,0 +1,54 @@
+# ⚠ DRAFT FOR 2013-2 (p-Si) — derived from 2013-3 plans 2026-07-13.
+# BEFORE FIRST USE: run landing_scout.py on this device; verify per-rung
+# pins (I_pk<70% FS) and polarity settle assignments (which side is drifty
+# is DEVICE-SPECIFIC — do not assume n-Si behavior). Adjust, then remove
+# this banner.
+# === S1 (unfiltered half) — Definitive 0 V dark spectrum, wideband ===
+# HARDWARE: filter OUT (direct/barrel). Anchor brackets the half-ladder.
+# COMP DECISION 2026-07-10: ALL blocks run RAW (comp OFF). The stored Jul-2 comp
+# predates the reed switcher (its ~1.5 uH / 40 mOhm bypass path) and would apply a
+# WRONG correction. Fresh open/short standards are measured AFTER the session
+# (probes lift then anyway) and applied OFFLINE (open-short post-correction in the
+# analysis pipeline, same pattern as the pi-filter de-embed).
+device: {id: "2013-2", substrate: "p-Si", notes: "S1 definitive 0V dark - wideband"}
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-2_p-Si_S1_0V"
+defaults:
+  filter_state: "out"          # reed switcher (aux-driven); remove if manual hardware
+  amplitude_mv_rms: 30
+  light_amplitude_mv_rms: 30
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 10
+  dark_settle_s: 10
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 10
+  averaging_tcs: 15
+  compensation_enabled: false
+  current_range_a: auto
+  freq: {start_hz: 1000, stop_hz: 500000, points_per_decade: 10}
+blocks:
+  - name: "S1U anchor (1 k-500 kHz, auto, RAW)"
+    type: c-f
+    bias: [0]
+    illumination: {dark_only: true}
+  - name: "S1U grid band 3.4 k-500 kHz (auto, RAW)"
+    type: c-f
+    bias: [0]
+    freq: {start_hz: 3400, stop_hz: 500000, points_per_decade: 10}
+    illumination: {dark_only: true}
+  # 2026-07-10 smoke finding: pinned 10 uA ran 3-6% FS (thin) and 15 TCs is
+  # only ~0.1 s/pt up here -> scatter + a 428 Hz outlier (420 mains harmonic
+  # inside the wide demod band). Fix: auto range + heavy averaging.
+  - name: "S1U 340-3400 Hz (auto, comp OFF, mains-offset, heavy avg)"
+    type: c-f
+    bias: [0]
+    current_range_a: auto
+    averaging_tcs: 100
+    compensation_enabled: false
+    freq: {start_hz: 340, stop_hz: 3400, points_per_decade: 10}
+    illumination: {dark_only: true}
+  - name: "S1U anchor repeat (1 k-500 kHz, RAW)"
+    type: c-f
+    bias: [0]
+    illumination: {dark_only: true}

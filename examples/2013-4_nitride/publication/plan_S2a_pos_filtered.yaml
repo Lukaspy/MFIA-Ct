@@ -1,0 +1,31 @@
+# ⚠ DRAFT FOR 2013-4 (nitride) — derived from 2013-3 plans 2026-07-13.
+# BEFORE FIRST USE: run landing_scout.py on this device; verify per-rung
+# pins (I_pk<70% FS) and polarity settle assignments (which side is drifty
+# is DEVICE-SPECIFIC — do not assume n-Si behavior). Adjust, then remove
+# this banner.
+# === S2a (filtered half) — positive dark bias ladder, 34-340 Hz ===
+# Rungs gentlest-first; x2 spaced repeats of +1/+2 encoded as trailing revisits.
+# Settles: conservative fixed 300 s (interim until the settle-monitor tool lands).
+# NOTE runner currently HARD-STEPS bias — ramp fix pending in MFIA-Ct (tool #6).
+device: {id: "2013-4", substrate: "nitride", notes: "S2a positive rungs - filtered band"}
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-4_nitride_S2a_pos"
+defaults:
+  filter_state: "in"     # reed switcher (MISSING during 2026-07-12 S2a run — root cause of that session's loss)
+  amplitude_mv_rms: 30
+  light_amplitude_mv_rms: 30
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 300
+  dark_settle_s: 10
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 10
+  averaging_tcs: 15
+  compensation_enabled: false
+  current_range_a: 1.0e-6
+  freq: {start_hz: 34, stop_hz: 340, points_per_decade: 10}
+blocks:
+  - name: "S2aF rungs 34-340 Hz (1 uA, 300 s settles, +1/+2 spaced repeats)"
+    type: c-f
+    bias: [1, 2, 4, 7, 2, 1]
+    illumination: {dark_only: true}

@@ -1,0 +1,37 @@
+# ⚠ DRAFT FOR 2013-2 (p-Si) — derived from 2013-3 plans 2026-07-13.
+# BEFORE FIRST USE: run landing_scout.py on this device; verify per-rung
+# pins (I_pk<70% FS) and polarity settle assignments (which side is drifty
+# is DEVICE-SPECIFIC — do not assume n-Si behavior). Adjust, then remove
+# this banner.
+# === S1-v2 filtered mid band ONLY (34-340; lows are manual-poll v2) ===
+# Publication-grade plan S1 (OGT_capacitance_analysis/reports/publication_grade_mfia_plan.md)
+# HARDWARE: pi filter IN at LCUR (C-side to MFIA). Run AFTER the unfiltered half
+# (or per boustrophedon order — see S1_driver.sh). Repeat x3 spaced >=45 min.
+# Precondition: R0 (landed, 0 V, dark, light-tight, rested >=2 h / overnight).
+# Grids: decade start 34/3.4/1/0.3 -> every point >=6 Hz from mains 60/120/180/240.
+# Seam-shared endpoints with unfiltered half: 340 Hz. Comp OFF (raw + de-embed).
+# NO one-period averaging (decision 2026-07-10): averaging_tcs only (validated).
+device: {id: "2013-2", substrate: "p-Si", notes: "S1 definitive 0V dark - filtered bands"}
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-2_p-Si_S1_0V"
+defaults:
+  filter_state: "in"          # reed switcher (aux-driven); remove if manual hardware
+  amplitude_mv_rms: 30
+  light_amplitude_mv_rms: 30
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 10
+  dark_settle_s: 10
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 10
+  averaging_tcs: 15
+  compensation_enabled: false
+  current_range_a: 1.0e-6
+  freq: {start_hz: 34, stop_hz: 340, points_per_decade: 10}
+blocks:
+  - name: "S1F 34-340 Hz (1 uA, mains-offset grid)"
+    type: c-f
+    bias: [0]
+    current_range_a: 1.0e-6
+    freq: {start_hz: 34, stop_hz: 340, points_per_decade: 10}
+    illumination: {dark_only: true}
