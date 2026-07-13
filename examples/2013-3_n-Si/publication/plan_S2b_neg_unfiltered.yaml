@@ -1,5 +1,7 @@
 # === S2b (unfiltered half) — negative dark bias ladder, 340 Hz-500 kHz ===
 device: {id: "2013-3", substrate: "n-Si", notes: "S2b negative rungs - wideband"}
+# COMP: ALL RAW (stored Jul-2 comp invalid for switcher-era chain; proven
+# 2026-07-10: negative Re through bypass). Post-hoc open/short applied offline.
 output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_S2b_pos"
 defaults:
   amplitude_mv_rms: 30
@@ -12,7 +14,7 @@ defaults:
   auto_bandwidth: true
   oversampling: 10
   averaging_tcs: 15
-  compensation_enabled: true
+  compensation_enabled: false
   current_range_a: auto
   freq: {start_hz: 1000, stop_hz: 500000, points_per_decade: 10}
 blocks:
