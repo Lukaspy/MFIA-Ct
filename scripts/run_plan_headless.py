@@ -180,6 +180,9 @@ def main() -> None:
             fs = getattr(cfg.run, "filter_state", None)
             if fs is not None and args.instrument == "mfia":
                 set_filter_state(backend, fs, log)
+            elif args.instrument == "mfia":
+                log("    switcher: UNTOUCHED (no filter_state in plan) — verify "
+                    "hardware state is what this block expects!")
             led = PxiLedSource(bitfile=args.bitfile, resource=args.led_resource, use_cal=True)
             try:
                 for result in CfExperiment(backend, cfg, led=led).run():

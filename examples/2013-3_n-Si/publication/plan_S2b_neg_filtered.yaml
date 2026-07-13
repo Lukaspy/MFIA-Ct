@@ -5,6 +5,7 @@
 device: {id: "2013-3", substrate: "n-Si", notes: "S2b negative rungs - filtered band"}
 output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_S2b_pos"
 defaults:
+  filter_state: "in"     # reed switcher (MISSING during 2026-07-12 S2a run — root cause of that session's loss)
   amplitude_mv_rms: 30
   light_amplitude_mv_rms: 30
   terminal_mode: 2-terminal
