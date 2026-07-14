@@ -42,7 +42,11 @@ blocks:
     bias: [1]
     filter_state: "in"
     current_range_a: 1.0e-6
-    device_settle_s: 20
+    # v3.2 (2026-07-14): 240 s post-toggle settle. Repro measured the filtered-path
+    # disturbance at ~90-120 s after the out->in switcher toggle (ranging and
+    # overload both verified clean via live monitor); sweeps self-heal mid-run.
+    # 240 s clears it with margin. (The 20 s hot-fix value was the v3.1 bug.)
+    device_settle_s: 240
     freq: {start_hz: 34, stop_hz: 340, points_per_decade: 10}
     illumination: {dark_only: true}
   - name: "U 340-500k @+2 V (rung entry; doubles as settle buffer)"
@@ -57,7 +61,11 @@ blocks:
     bias: [2]
     filter_state: "in"
     current_range_a: 1.0e-6
-    device_settle_s: 20
+    # v3.2 (2026-07-14): 240 s post-toggle settle. Repro measured the filtered-path
+    # disturbance at ~90-120 s after the out->in switcher toggle (ranging and
+    # overload both verified clean via live monitor); sweeps self-heal mid-run.
+    # 240 s clears it with margin. (The 20 s hot-fix value was the v3.1 bug.)
+    device_settle_s: 240
     freq: {start_hz: 34, stop_hz: 340, points_per_decade: 10}
     illumination: {dark_only: true}
   - name: "U 340-500k @+4 V (rung entry; doubles as settle buffer)"
@@ -72,7 +80,11 @@ blocks:
     bias: [4]
     filter_state: "in"
     current_range_a: 1.0e-6
-    device_settle_s: 20
+    # v3.2 (2026-07-14): 240 s post-toggle settle. Repro measured the filtered-path
+    # disturbance at ~90-120 s after the out->in switcher toggle (ranging and
+    # overload both verified clean via live monitor); sweeps self-heal mid-run.
+    # 240 s clears it with margin. (The 20 s hot-fix value was the v3.1 bug.)
+    device_settle_s: 240
     freq: {start_hz: 34, stop_hz: 340, points_per_decade: 10}
     illumination: {dark_only: true}
   - name: "U 340-500k @+7 V (rung entry; doubles as settle buffer)"
@@ -87,7 +99,11 @@ blocks:
     bias: [7]
     filter_state: "in"
     current_range_a: 1.0e-6
-    device_settle_s: 20
+    # v3.2 (2026-07-14): 240 s post-toggle settle. Repro measured the filtered-path
+    # disturbance at ~90-120 s after the out->in switcher toggle (ranging and
+    # overload both verified clean via live monitor); sweeps self-heal mid-run.
+    # 240 s clears it with margin. (The 20 s hot-fix value was the v3.1 bug.)
+    device_settle_s: 240
     freq: {start_hz: 34, stop_hz: 340, points_per_decade: 10}
     illumination: {dark_only: true}
   - name: "anchor 0V end"
