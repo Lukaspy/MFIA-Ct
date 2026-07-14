@@ -116,6 +116,30 @@ def set_filter_state(backend, state, log_fn):
     log_fn(f"    switcher: filter {state.upper()} (make-before-break)")
 
 
+def _sweep_roughness(path):
+    """Median geometric-neighbor residual of |Z| (%) for a written C-f CSV."""
+    import math as _m
+    v=[]
+    with open(path) as fh:
+        past_hdr=False
+        for line in fh:
+            if line.startswith("#"): continue
+            if not past_hdr: past_hdr=True; continue
+            try: v.append(float(line.split(",")[1]))
+            except (ValueError, IndexError): pass
+    if len(v)<4: return 0.0
+    res=[abs(v[i]-_m.sqrt(v[i-1]*v[i+1]))/_m.sqrt(v[i-1]*v[i+1])*100
+         for i in range(1,len(v)-1) if v[i-1]>0 and v[i+1]>0]
+    res.sort()
+    return res[len(res)//2] if res else 0.0
+
+
+def _block_gate_limit(cfg):
+    lo = cfg.sweeper.start_hz if getattr(cfg,"sweeper",None) else None
+    if lo is None: return None          # C-V / I-V blocks: no roughness gate
+    return 10.0 if lo < 34 else (5.0 if lo < 1100 else 3.0)
+
+
 def connect_backend(args):
     """Open the selected analyzer and return it, or exit on a failed pre-check."""
     if args.instrument == "b1500":
@@ -185,14 +209,28 @@ def main() -> None:
                     "hardware state is what this block expects!")
             led = PxiLedSource(bitfile=args.bitfile, resource=args.led_resource, use_cal=True)
             try:
+                block_paths = []
                 for result in CfExperiment(backend, cfg, led=led).run():
                     path = out_dir / make_filename(result.metadata)
                     if isinstance(result, IvResult):
                         write_iv_csv(result, path)
                     else:
                         write_sweep_csv(result, path)
+                        block_paths.append(path)
                     n_sweeps += 1
                     log(f"    wrote {path.name}")
+                # RUNTIME ROUGHNESS GATE (audit 2026-07-14): requeue a dirty
+                # block ONCE instead of discovering it offline.
+                lim = _block_gate_limit(cfg)
+                if lim and not getattr(cfg, "_requeued", False):
+                    dirty = [(p, _sweep_roughness(p)) for p in block_paths]
+                    dirty = [(p, r) for p, r in dirty if r > lim]
+                    if dirty:
+                        for p, r in dirty:
+                            log(f"    ROUGHNESS-GATE: {p.name} = {r:.1f}% "
+                                f"(gate {lim:g}%) — block will requeue once")
+                        cfg._requeued = True
+                        configs.insert(i + 1, cfg)
                 n_ok += 1
                 log(f"  block {i + 1} OK")
             except Exception as e:

@@ -65,7 +65,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "1.0 (2026-07-09)"
+VERSION = "1.1 (2026-07-14: +manual C-V format, per-row Z_in)"
 
 # Z_in by current range (Ohm) — MFIA UM Table 7.10
 ZIN_BY_RANGE = {
@@ -122,19 +122,71 @@ def derived_columns(z, f_hz, bias):
     }
 
 
+def process_cv_file(path, consts, suffix):
+    """Manual C-V format: fixed f per file, bias column, PER-ROW current_range_a."""
+    header_lines, rows = [], []
+    with open(path) as fh:
+        for line in fh:
+            if line.startswith("#"):
+                header_lines.append(line.rstrip("\n"))
+            else:
+                rows = list(csv.DictReader([line.rstrip("\n")] + fh.read().splitlines()))
+                break
+    if not rows or "current_range_a" not in rows[0]:
+        print(f"  SKIP {path.name}: C-V file without per-row range column")
+        return False
+    out = path.with_name(path.stem + suffix + ".csv")
+    with open(out, "w", newline="") as fh:
+        for h in header_lines:
+            fh.write(h + "\n")
+        fh.write(f"# DEEMBEDDED (C-V): LCUR pi filter removed "
+                 f"(script v{VERSION}, run {time.strftime('%Y-%m-%dT%H:%M:%S')})\n")
+        fh.write(f"# deembed_constants: R={consts['R_ohm']} ohm, "
+                 f"C1={consts['C1_farad']*1e9:.3f} nF, C2={consts['C2_farad']*1e9:.3f} nF, "
+                 f"Z_in per-row from current_range_a column\n")
+        cols = ["bias_v","direction","frequency_hz","z_mag_ohm","phase_deg",
+                "g_siemens","b_siemens","cp_f","rp_ohm","re_z_ohm","im_z_ohm",
+                "current_range_a"]
+        w = csv.DictWriter(fh, fieldnames=cols)
+        w.writeheader()
+        n_skip = 0
+        for r in rows:
+            f_hz = float(r["frequency_hz"])
+            rng = float(r["current_range_a"])
+            z_in = ZIN_BY_RANGE.get(rng)
+            if z_in is None:
+                n_skip += 1
+                continue
+            z_raw = complex(float(r["re_z_ohm"]), float(r["im_z_ohm"]))
+            z = deembed_point(f_hz, z_raw, consts, z_in)
+            d = derived_columns(z, f_hz, float(r["bias_v"]))
+            d.pop("cs_f", None); d.pop("rs_ohm", None)
+            row = {"bias_v": r["bias_v"], "direction": r.get("direction",""),
+                   "frequency_hz": f_hz, "current_range_a": rng, **d}
+            w.writerow({k: (f"{v:.9g}" if isinstance(v, float) else v)
+                        for k, v in row.items() if k in cols})
+    print(f"  ok   {path.name} -> {out.name}  (C-V, per-row Z_in{', skipped '+str(n_skip)+' rows' if n_skip else ''})")
+    return True
+
+
 def process_file(path, consts, suffix):
     header_lines, rows, range_a = [], [], None
+    is_cv = False
     with open(path) as fh:
         for line in fh:
             if line.startswith("#"):
                 header_lines.append(line.rstrip("\n"))
                 if line.startswith("# current_range_a:"):
                     val = line.split(":", 1)[1].strip()
-                    range_a = None if val == "auto" else float(val)
+                    range_a = None if val in ("auto", "per-point (column)") else float(val)
+                if line.startswith("# sweep_type:") and "C-V" in line:
+                    is_cv = True
             else:
                 rd = csv.DictReader([line.rstrip("\n")] + fh.read().splitlines())
                 rows = list(rd)
                 break
+    if is_cv and rows and "current_range_a" in rows[0]:
+        return process_cv_file(path, consts, suffix)
     if range_a is None:
         print(f"  SKIP {path.name}: current_range_a is auto/absent — "
               f"realized range unknown; de-embed requires a pinned range")
