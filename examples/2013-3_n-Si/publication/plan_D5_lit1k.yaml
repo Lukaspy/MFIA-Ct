@@ -1,0 +1,29 @@
+# === D5 lit: 1 kHz C-V, dim lambda matrix (LED capability the B1500 lacks) ===
+device: {id: "2013-3", substrate: "n-Si", notes: "D5 lit 1 kHz C-V"}
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_D5_cv"
+defaults:
+  amplitude_mv_rms: 30
+  light_amplitude_mv_rms: 30
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 240
+  dark_settle_s: 60
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 10
+  averaging_tcs: 15
+  compensation_enabled: false
+  current_range_a: auto
+  filter_state: "out"
+blocks:
+  - name: "D5 lit 1 kHz C-V (470/625/740 x 1/3%, dark brackets)"
+    type: c-v
+    frequencies: [1000]
+    bias: {start_v: -7, stop_v: 7, points: 141}
+    illumination:
+      mode: matrix
+      dark_bracket: per-wavelength
+      wavelengths:
+        - {nm: 470, intensities: [1, 3]}
+        - {nm: 625, intensities: [1, 3]}
+        - {nm: 740, intensities: [1, 3]}

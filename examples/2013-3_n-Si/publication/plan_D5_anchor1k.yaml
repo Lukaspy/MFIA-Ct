@@ -1,0 +1,28 @@
+# === D5 anchor: 1 kHz dark C-V, both directions (B1500 tie-point, x1) ===
+device: {id: "2013-3", substrate: "n-Si", notes: "D5 1 kHz anchor C-V"}
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_D5_cv"
+defaults:
+  amplitude_mv_rms: 30
+  light_amplitude_mv_rms: 30
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 240
+  dark_settle_s: 30
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 10
+  averaging_tcs: 15
+  compensation_enabled: false
+  current_range_a: auto
+  filter_state: "out"
+blocks:
+  - name: "D5 anchor 1 kHz C-V forward (-7 -> +7)"
+    type: c-v
+    frequencies: [1000]
+    bias: {start_v: -7, stop_v: 7, points: 141}
+    illumination: {dark_only: true}
+  - name: "D5 anchor 1 kHz C-V reverse (+7 -> -7)"
+    type: c-v
+    frequencies: [1000]
+    bias: {start_v: 7, stop_v: -7, points: 141}
+    illumination: {dark_only: true}
