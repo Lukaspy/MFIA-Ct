@@ -1,0 +1,30 @@
+# === S4 (D4) intensity series — ALWAYS the device's LAST session (state-brutal
+# by design; lit_verify measured 0.1% bracket recovery after brief 100% — long
+# soaks still treated as dosing). Bypass only; auto range (10 mA reachable).
+device: {id: "2013-3", substrate: "n-Si", notes: "S4 intensity series"}
+output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_S4_intensity"
+defaults:
+  amplitude_mv_rms: 30
+  light_amplitude_mv_rms: 30
+  terminal_mode: 2-terminal
+  equiv_circuit: Cp||Rp
+  device_settle_s: 300
+  dark_settle_s: 120
+  settling_tcs: 15
+  auto_bandwidth: true
+  oversampling: 10
+  averaging_tcs: 15
+  compensation_enabled: false
+  current_range_a: auto
+  filter_state: "out"
+  freq: {start_hz: 340, stop_hz: 500000, points_per_decade: 10}
+blocks:
+  - name: "S4 intensity ladders @-2 V (470/625/740, monotonic 1-100%)"
+    type: c-f
+    bias: [-2]
+    illumination:
+      mode: matrix
+      wavelengths: [470, 625, 740]
+      order: as-listed
+      intensities: [1, 3, 10, 30, 100]
+      dark_bracket: per-wavelength
