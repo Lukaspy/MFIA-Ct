@@ -3,7 +3,10 @@
 # blow the visit budget — POSITIVE rungs also fluctuate by visit 3-4 (kOhm
 # collapse under the fine pin). v3: ONE visit per rung per pass; at each rung
 # measure filtered band then wideband back-to-back (switcher toggles per
-# block); repeats come from x3 passes only. Comp OFF everywhere (post-hoc).
+# block); repeats come from x3 passes only. v3.1 (2026-07-13 22:15): U runs
+# FIRST at each rung — S2b-v3 showed the post-step transient outlasts 300 s
+# (F-first chaos, U-after clean at every rung); U doubles as settle buffer so
+# F measures ~8-10 min post-step. Comp OFF everywhere (post-hoc).
 device: {id: "2013-3", substrate: "n-Si", notes: "S2b-v3 negative rungs bias-major v3"}
 output_dir: "/home/lukas/Documents/capacitance_measurements/2013-3_S2b_neg"
 defaults:
@@ -27,61 +30,65 @@ blocks:
     filter_state: "out"
     device_settle_s: 60
     illumination: {dark_only: true}
-  - name: "F 34-340 @-1 V"
+  - name: "U 340-500k @-1 V (rung entry; doubles as settle buffer)"
+    type: c-f
+    bias: [-1]
+    filter_state: "out"
+    device_settle_s: 300
+    freq: {start_hz: 340, stop_hz: 500000, points_per_decade: 10}
+    illumination: {dark_only: true}
+  - name: "F 34-340 @-1 V (runs ~8-10 min post-step)"
     type: c-f
     bias: [-1]
     filter_state: "in"
     current_range_a: 1.0e-6
+    device_settle_s: 20
     freq: {start_hz: 34, stop_hz: 340, points_per_decade: 10}
     illumination: {dark_only: true}
-  - name: "U 340-500k @-1 V (same rung, no re-step)"
+  - name: "U 340-500k @-2 V (rung entry; doubles as settle buffer)"
     type: c-f
-    bias: [-1]
+    bias: [-2]
     filter_state: "out"
-    device_settle_s: 20
+    device_settle_s: 300
     freq: {start_hz: 340, stop_hz: 500000, points_per_decade: 10}
     illumination: {dark_only: true}
-  - name: "F 34-340 @-2 V"
+  - name: "F 34-340 @-2 V (runs ~8-10 min post-step)"
     type: c-f
     bias: [-2]
     filter_state: "in"
     current_range_a: 1.0e-6
+    device_settle_s: 20
     freq: {start_hz: 34, stop_hz: 340, points_per_decade: 10}
     illumination: {dark_only: true}
-  - name: "U 340-500k @-2 V (same rung, no re-step)"
+  - name: "U 340-500k @-4 V (rung entry; doubles as settle buffer)"
     type: c-f
-    bias: [-2]
+    bias: [-4]
     filter_state: "out"
-    device_settle_s: 20
+    device_settle_s: 300
     freq: {start_hz: 340, stop_hz: 500000, points_per_decade: 10}
     illumination: {dark_only: true}
-  - name: "F 34-340 @-4 V"
+  - name: "F 34-340 @-4 V (runs ~8-10 min post-step)"
     type: c-f
     bias: [-4]
     filter_state: "in"
     current_range_a: 1.0e-6
+    device_settle_s: 20
     freq: {start_hz: 34, stop_hz: 340, points_per_decade: 10}
     illumination: {dark_only: true}
-  - name: "U 340-500k @-4 V (same rung, no re-step)"
+  - name: "U 340-500k @-7 V (rung entry; doubles as settle buffer)"
     type: c-f
-    bias: [-4]
+    bias: [-7]
     filter_state: "out"
-    device_settle_s: 20
+    device_settle_s: 300
     freq: {start_hz: 340, stop_hz: 500000, points_per_decade: 10}
     illumination: {dark_only: true}
-  - name: "F 34-340 @-7 V"
+  - name: "F 34-340 @-7 V (runs ~8-10 min post-step)"
     type: c-f
     bias: [-7]
     filter_state: "in"
     current_range_a: 1.0e-6
-    freq: {start_hz: 34, stop_hz: 340, points_per_decade: 10}
-    illumination: {dark_only: true}
-  - name: "U 340-500k @-7 V (same rung, no re-step)"
-    type: c-f
-    bias: [-7]
-    filter_state: "out"
     device_settle_s: 20
-    freq: {start_hz: 340, stop_hz: 500000, points_per_decade: 10}
+    freq: {start_hz: 34, stop_hz: 340, points_per_decade: 10}
     illumination: {dark_only: true}
   - name: "anchor 0V end"
     type: c-f
