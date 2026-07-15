@@ -23,6 +23,11 @@ park(){ $PY /tmp/park_0V.py; }
 rest(){ log "rest $1 min"; sleep $(($1*60)); }
 
 DEV=$(basename $(dirname $PLANS))   # e.g. 2013-3_n-Si
+export MFIA_DEVICE_ID=${DEV%%_*}
+export MFIA_SUBSTRATE=${DEV#*_}
+export MFIA_S1_OUT=$OUTROOT/${MFIA_DEVICE_ID}_S1_0V
+export MFIA_S3_BIAS=${MFIA_S3_BIAS:--2.0}   # override per device (photo-active sign!)
+mkdir -p $MFIA_S1_OUT
 log "=== MASTER PROTOCOL START: $DEV, ${NPASS}x passes ==="
 
 # --- S1: definitive 0 V dark (dense manual lows 0.1-340 + wideband) ---
@@ -42,7 +47,7 @@ for p in $(seq 1 $NPASS); do
   log "S2a pass $p/$NPASS: wideband rungs"
   $RUN $PLANS/plan_S2a_U.yaml --no-contact-check || exit 1
   log "S2a pass $p/$NPASS: manual filtered rungs"
-  $PY /tmp/manual_rungs.py $OUTROOT/${DEV%%_*}_S2a_pos "1,2,4,7" "S2aP$p" || exit 1
+  $PY /tmp/manual_rungs.py $OUTROOT/${MFIA_DEVICE_ID}_S2a_pos "1,2,4,7" "S2aP$p" || exit 1
   [ $p -lt $NPASS ] && rest 30
 done
 park; rest 20
@@ -53,7 +58,7 @@ for p in $(seq 1 $NPASS); do
   log "S2b pass $p/$NPASS: wideband rungs"
   $RUN $PLANS/plan_S2b_U.yaml --no-contact-check || exit 1
   log "S2b pass $p/$NPASS: manual filtered rungs (3.4-340)"
-  $PY /tmp/manual_rungs_neg.py $OUTROOT/${DEV%%_*}_S2b_neg "-1,-2,-4,-7" "S2bP$p" || exit 1
+  $PY /tmp/manual_rungs_neg.py $OUTROOT/${MFIA_DEVICE_ID}_S2b_neg "-1,-2,-4,-7" "S2bP$p" || exit 1
   [ $p -lt $NPASS ] && rest 30
 done
 park; rest 20
@@ -65,7 +70,7 @@ $RUN $PLANS/plan_D5_anchor1k.yaml --no-contact-check || exit 1
 for f in 100 10 1; do
   n=71
   log "D5: manual C-V $f Hz ($n pts/direction)"
-  $PY /tmp/manual_cv_v2.py $f $OUTROOT/${DEV%%_*}_D5_cv $n 7.0 "CV${f}Hz" || exit 1
+  $PY /tmp/manual_cv_v2.py $f $OUTROOT/${MFIA_DEVICE_ID}_D5_cv $n 7.0 "CV${f}Hz" || exit 1
 done
 log "D5: lit 1 kHz C-V (dim matrix)"
 $RUN $PLANS/plan_D5_lit1k.yaml --no-contact-check || exit 1
@@ -76,7 +81,7 @@ gate S3
 log "S3: wideband spectral matrix (runner)"
 $RUN $PLANS/plan_S3_wideband.yaml --no-contact-check || exit 1
 log "S3: filtered lambda spots (manual)"
-$PY /tmp/manual_lit_spots.py $OUTROOT/${DEV%%_*}_S3_action || exit 1
+$PY /tmp/manual_lit_spots.py $OUTROOT/${MFIA_DEVICE_ID}_S3_action || exit 1
 park; rest 30
 
 # --- S4: intensity series — ALWAYS LAST ---
