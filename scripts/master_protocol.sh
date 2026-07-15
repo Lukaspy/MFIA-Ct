@@ -27,6 +27,8 @@ export MFIA_DEVICE_ID=${DEV%%_*}
 export MFIA_SUBSTRATE=${DEV#*_}
 export MFIA_S1_OUT=$OUTROOT/${MFIA_DEVICE_ID}_S1_0V
 export MFIA_S3_BIAS=${MFIA_S3_BIAS:--2.0}   # override per device (photo-active sign!)
+ARC_SIDE=${MFIA_ARC_SIDE:-neg}   # which polarity gets the 3.4 Hz arc-closure floor
+[ "$ARC_SIDE" = "pos" ] && { FLOOR_POS=3.4; FLOOR_NEG=34; } || { FLOOR_POS=34; FLOOR_NEG=3.4; }
 mkdir -p $MFIA_S1_OUT
 log "=== MASTER PROTOCOL START: $DEV, ${NPASS}x passes ==="
 
@@ -47,7 +49,7 @@ for p in $(seq 1 $NPASS); do
   log "S2a pass $p/$NPASS: wideband rungs"
   $RUN $PLANS/plan_S2a_U.yaml --no-contact-check || exit 1
   log "S2a pass $p/$NPASS: manual filtered rungs"
-  $PY /tmp/manual_rungs.py $OUTROOT/${MFIA_DEVICE_ID}_S2a_pos "1,2,4,7" "S2aP$p" || exit 1
+  $PY /tmp/manual_rungs.py $OUTROOT/${MFIA_DEVICE_ID}_S2a_pos "1,2,4,7" "S2aP$p" $FLOOR_POS || exit 1
   [ $p -lt $NPASS ] && rest 30
 done
 park; rest 20
@@ -58,7 +60,7 @@ for p in $(seq 1 $NPASS); do
   log "S2b pass $p/$NPASS: wideband rungs"
   $RUN $PLANS/plan_S2b_U.yaml --no-contact-check || exit 1
   log "S2b pass $p/$NPASS: manual filtered rungs (3.4-340)"
-  $PY /tmp/manual_rungs_neg.py $OUTROOT/${MFIA_DEVICE_ID}_S2b_neg "-1,-2,-4,-7" "S2bP$p" || exit 1
+  $PY /tmp/manual_rungs.py $OUTROOT/${MFIA_DEVICE_ID}_S2b_neg "-1,-2,-4,-7" "S2bP$p" $FLOOR_NEG || exit 1
   [ $p -lt $NPASS ] && rest 30
 done
 park; rest 20
